@@ -208,6 +208,7 @@ constexpr std::array<double, 6> kDsd128Coefficients = {
     0.012597119999973313000, 0.116639999999997970000, 0.540000000000002260000
 };
 
+
 struct DsdRatePair { int dsd64Hz; int dsd128Hz; int dsd256Hz; int dsd512Hz; int dsd1024Hz; };
 constexpr DsdRatePair kDsd44Family{2822400, 5644800, 11289600, 22579200, 45158400};
 constexpr DsdRatePair kDsd48Family{3072000, 6144000, 12288000, 24576000, 49152000};
