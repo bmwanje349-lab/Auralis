@@ -177,7 +177,8 @@ class MainActivity : Activity() {
         type: Int,
         frequency: Int,
         q: Double,
-        channel: Int = 0
+        channel: Int = 0,
+        initialGainDb: Double = 0.0
     ) {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -189,7 +190,10 @@ class MainActivity : Activity() {
             setTextColor(Color.WHITE)
         }
         val value = label("Gain: 0.0 dB")
-        val gain = SeekBar(this).apply { max = 300; progress = 150 }
+        val gain = SeekBar(this).apply {
+            max = 300
+            progress = ((initialGainDb.coerceIn(-15.0, 15.0) * 10.0) + 150.0).toInt()
+        }
         val control = EqUiControl(index, type, frequency, q, channel, toggle, gain, value)
         eqControls.add(control)
 
@@ -280,7 +284,7 @@ class MainActivity : Activity() {
                     else -> {
                         val index = eqControls.size
                         val title = "${FILTER_SHORT_NAMES[type]} · $frequency Hz · Q ${"%.2f".format(q)}"
-                        addEqBand(eqContainer, title, index, type, frequency, q, channel)
+                        addEqBand(eqContainer, title, index, type, frequency, q, channel, gain)
                         playback?.setEqBand(index, false, type, frequency, q, gain, channel)
                         dialog.dismiss()
                     }
