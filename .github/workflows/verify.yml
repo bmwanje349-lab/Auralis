@@ -33,6 +33,13 @@ jobs:
           git -C auralis remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git -C auralis fetch --depth=1 origin "${GITHUB_SHA}"
           git -C auralis checkout --detach FETCH_HEAD
+      - name: Install supported JDK 17
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> "$GITHUB_ENV"
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> "$GITHUB_PATH"
       - name: Install Android SDK components
         shell: bash
         run: |
@@ -40,7 +47,6 @@ jobs:
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="$(find "${ANDROID_HOME}/cmdline-tools" -name sdkmanager -type f | head -n 1)"
           fi
-          # sdkmanager exits after all licences are accepted; yes may receive SIGPIPE.
           set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null
           set -o pipefail
@@ -51,4 +57,5 @@ jobs:
           unzip -q /tmp/gradle.zip -d /tmp
       - name: Assemble Android player
         run: |
+          java -version
           /tmp/gradle-8.7/bin/gradle --no-daemon -p auralis assembleDebug testDebugUnitTest
