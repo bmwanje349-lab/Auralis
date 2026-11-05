@@ -1,0 +1,225 @@
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace auralis {
+
+constexpr int kMaxEqBands = 64;
+constexpr int kChunkFrames = 1024;
+constexpr int kQueueSlots = 8;
+constexpr int kMaxDelaySamples = 192000; // 4 seconds at 48 kHz; bounded allocation at init.
+
+enum class EqFilterType : int { LowPass = 0, HighPass = 1, BandPass = 2, Peaking = 3, LowShelf = 4, HighShelf = 5 };
+
+enum class LimiterPath : int { HardCeiling = 0, ConfigurableThreshold = 1 };
+
+enum class ResamplerMode : int { Fast = 0x11, Balanced = 0x1F };
+
+enum class DitherMode : int {
+    None, Rectangular, Triangular, TriangularHighPass,
+    NoiseShapingFWeighted, ModifiedEWeighted, ImprovedEWeighted, Shibata, LowShibata
+};
+
+struct BiquadCoefficients {
+    double b0 = 1.0, b1 = 0.0, b2 = 0.0, a1 = 0.0, a2 = 0.0;
+};
+
+struct BiquadState {
+    double z1 = 0.0, z2 = 0.0;
+    double process(double x, const BiquadCoefficients& c) noexcept;
+    void reset() noexcept { z1 = 0.0; z2 = 0.0; }
+};
+
+bool calculateBiquad(int sampleRate, int frequencyHz, EqFilterType type,
+                     double q, double gainDb, BiquadCoefficients& out) noexcept;
+double evaluateBiquadMagnitudeDb(const BiquadCoefficients& c, double frequencyHz,
+                                  double sampleRate) noexcept;
+
+struct EqBand {
+    bool enabled = false;
+    EqFilterType type = EqFilterType::Peaking;
+    int frequencyHz = 1000;
+    double q = 1.0;
+    double gainDb = 0.0;
+    int channel = 0; // 0 = both, 1 = left, 2 = right
+    BiquadCoefficients coefficients{};
+    BiquadState left{}, right{};
+};
+
+struct ReplayGainMetadata {
+    bool albumAvailable = false;
+    bool trackAvailable = false;
+    double albumGainDb = 0.0;
+    double albumPeakLinear = 0.0;
+    double trackGainDb = 0.0;
+    double trackPeakLinear = 0.0;
+};
+
+class ReplayGain {
+public:
+    // Recovered preference values: type 0=None, 1=Apply, 2=Apply Peak; source 0=Album, 1=Track.
+    void configure(int type, int source, int defaultGainMb, int preampMb) noexcept;
+    double linearGain(const ReplayGainMetadata& metadata) const noexcept;
+    static double dbToLinear(double db) noexcept;
+    static double millibelsToLinear(double millibels) noexcept;
+private:
+    int type_ = 0;
+    int source_ = 0;
+    int defaultGainMb_ = 0;
+    int preampMb_ = 0;
+};
+
+class Limiter {
+public:
+    void configure(bool enabled, LimiterPath path, double configurableCeiling) noexcept;
+    void reset() noexcept;
+    void process(float* interleavedStereo, std::size_t frames) noexcept;
+    double gain() const noexcept { return path_ == LimiterPath::HardCeiling ? hardGain_ : thresholdGain_; }
+    static constexpr double kAttackStep = 1.0 / 256.0;
+    static constexpr double kReleaseStep = 1.0 / 16384.0;
+private:
+    bool enabled_ = false;
+    LimiterPath path_ = LimiterPath::HardCeiling;
+    double configurableCeiling_ = 1.0;
+    double hardGain_ = 1.0;
+    double thresholdGain_ = 1.0;
+};
+
+class StereoWide {
+public:
+    void configure(bool enabled, double sliderPercent) noexcept;
+    void process(float* interleavedStereo, std::size_t frames) const noexcept;
+    void process(double* interleavedStereo, std::size_t frames) const noexcept;
+    double sideGain() const noexcept { return sideGain_; }
+private:
+    bool enabled_ = false;
+    double sideGain_ = 1.0;
+};
+
+struct ReverbParameters {
+    double size = 0.0;
+    double filter = 0.0;
+    double fade = 0.0;
+    double preDelay = 0.0;
+    double mix = 0.0;
+    double preDelayMix = 0.0;
+    double damp = 1.0;
+    bool flag = false;
+    std::array<int, 8> delaySamples{};
+};
+
+class ReverbControlModel {
+public:
+    explicit ReverbControlModel(int sampleRate = 48000) noexcept;
+    void setSampleRate(int sampleRate) noexcept;
+    // Native setter indices 0..6 are parameters; index 7 is a flag operation, never a p6 alias.
+    void setNativeParameter(int index, double value) noexcept;
+    const ReverbParameters& parameters() const noexcept { return params_; }
+    static constexpr std::array<double, 8> kDelaySeconds = {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110};
+    static constexpr std::array<double, 6> kRecoveredConstants = {0.75, 0.75, 0.625, 0.625, 0.25, 0.25};
+private:
+    void recalculateDelays() noexcept;
+    int sampleRate_ = 48000;
+    ReverbParameters params_{};
+};
+
+class AuralisDsp {
+public:
+    explicit AuralisDsp(int sampleRate);
+    void setStereoWide(bool enabled, double sliderPercent) noexcept;
+    void setLimiter(bool enabled, int path, double threshold) noexcept;
+    bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
+                   double gainDb, int channel) noexcept;
+    void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
+    void setReplayGainMetadata(const ReplayGainMetadata& metadata) noexcept;
+    void setEqPreampDb(double db) noexcept;
+    void setMasterGainDb(double db) noexcept;
+    void process(float* interleavedStereo, std::size_t frames) noexcept;
+    double stereoSideGain() const noexcept { return stereoWide_.sideGain(); }
+    const ReverbControlModel& reverbModel() const noexcept { return reverb_; }
+private:
+    int sampleRate_;
+    std::array<EqBand, kMaxEqBands> bands_{};
+    StereoWide stereoWide_{};
+    Limiter limiter_{};
+    ReplayGain replayGain_{};
+    ReplayGainMetadata replayGainMetadata_{};
+    ReverbControlModel reverb_;
+    double eqPreampLinear_ = 1.0;
+    double masterGainLinear_ = 1.0;
+};
+
+// Lock-free single-producer/single-consumer queue. Storage is allocated once during engine setup.
+class AudioRing {
+public:
+    AudioRing();
+    bool push(const float* interleaved, std::size_t frames) noexcept;
+    std::size_t pop(float* interleaved, std::size_t capacityFrames) noexcept;
+    bool empty() const noexcept;
+    bool full() const noexcept;
+private:
+    struct Slot {
+        std::array<float, kChunkFrames * 2> samples{};
+        std::uint32_t frames = 0;
+    };
+    std::array<Slot, kQueueSlots> slots_{};
+    alignas(64) std::atomic<std::uint32_t> head_{0};
+    alignas(64) std::atomic<std::uint32_t> tail_{0};
+};
+
+class AudioPipeline {
+public:
+    explicit AudioPipeline(int sampleRate);
+    bool enqueueInput(const float* interleaved, std::size_t frames) noexcept;
+    // Returns frames processed; 0 means no input is available; -1 means output queue is full.
+    int processOne() noexcept;
+    std::size_t dequeueOutput(float* interleaved, std::size_t capacityFrames) noexcept;
+    bool inputEmpty() const noexcept { return input_.empty(); }
+    // UI/configuration thread publishes commands; the DSP thread applies them between blocks.
+    void setStereoWide(bool enabled, double percent) noexcept;
+    void setLimiter(bool enabled, int path, double threshold) noexcept;
+    bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
+private:
+    struct ControlCommand { int kind=0, i0=0, i1=0, i2=0; double d0=0.0, d1=0.0; bool b0=false; };
+    bool publish(const ControlCommand& command) noexcept;
+    void applyPendingControls() noexcept;
+    std::array<ControlCommand, 128> controls_{};
+    alignas(64) std::atomic<std::uint32_t> controlHead_{0};
+    alignas(64) std::atomic<std::uint32_t> controlTail_{0};
+    AudioRing input_;
+    AudioRing output_;
+    AuralisDsp dsp_;
+    std::array<float, kChunkFrames * 2> scratch_{};
+};
+
+// Recovered configuration data which can be represented exactly without claiming an unknown kernel.
+constexpr std::array<int, 5> kP2dResamplerR = {8, 16, 32, 64, 128};
+constexpr std::array<int, 2> kP2dResamplerN = {3, 4};
+constexpr std::array<double, 6> kDsd64Coefficients = {
+    0.000037487688268165004, 0.000037487688264928030, 0.001318843318019954700,
+    0.021512542988272119000, 0.166867293178567580000, 0.648930895686424810000
+};
+constexpr std::array<double, 6> kDsd128Coefficients = {
+    0.000014693280767999990, 0.000014693280774056924, 0.000680244479988591400,
+    0.012597119999973313000, 0.116639999999997970000, 0.540000000000002260000
+};
+
+struct DsdRatePair { int dsd64Hz; int dsd128Hz; int dsd256Hz; int dsd512Hz; int dsd1024Hz; };
+constexpr DsdRatePair kDsd44Family{2822400, 5644800, 11289600, 22579200, 45158400};
+constexpr DsdRatePair kDsd48Family{3072000, 6144000, 12288000, 24576000, 49152000};
+
+// Tempo's recovered user-facing bounds; this does not implement an unrecovered time-stretch kernel.
+double clampRecoveredTempo(double factor) noexcept;
+// Resampler cutoff preference bounds/default are recovered; the exact SoX/P2D kernel is not part of this model.
+int clampRecoveredResamplerCutoff(int cutoffPercent) noexcept;
+int recoveredNoDvcHeadroomMb(int valueMb) noexcept;
+double recoveredBorderGainCeilingDb(double s) noexcept;
+
+double recoveredBalanceAttenuation(double normalizedMagnitude) noexcept;
+double recoveredDsdCutoff(double ratio) noexcept;
+
+} // namespace auralis

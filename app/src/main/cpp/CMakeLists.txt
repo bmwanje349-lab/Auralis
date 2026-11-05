@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(auralis_dsp LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+add_library(auralis_dsp STATIC audio_engine.cpp)
+target_include_directories(auralis_dsp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(auralis_dsp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+if(ANDROID)
+    add_library(auralis SHARED jni_bridge.cpp)
+    target_link_libraries(auralis PRIVATE auralis_dsp log android)
+else()
+    enable_testing()
+    add_executable(dsp_reference_tests tests/dsp_reference_tests.cpp)
+    target_link_libraries(dsp_reference_tests PRIVATE auralis_dsp)
+    add_test(NAME dsp_reference_tests COMMAND dsp_reference_tests)
+endif()

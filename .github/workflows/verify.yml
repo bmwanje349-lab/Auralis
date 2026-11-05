@@ -1,0 +1,51 @@
+name: Auralis verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  native-reference-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repository only
+        shell: bash
+        run: |
+          git init auralis
+          git -C auralis remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C auralis fetch --depth=1 origin "${GITHUB_SHA}"
+          git -C auralis checkout --detach FETCH_HEAD
+      - name: Compile native DSP and run reference tests
+        run: |
+          cmake -S auralis/app/src/main/cpp -B auralis/build-native -DCMAKE_BUILD_TYPE=Release
+          cmake --build auralis/build-native --parallel 2
+          ctest --test-dir auralis/build-native --output-on-failure
+
+  android-debug-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repository only
+        shell: bash
+        run: |
+          git init auralis
+          git -C auralis remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C auralis fetch --depth=1 origin "${GITHUB_SHA}"
+          git -C auralis checkout --detach FETCH_HEAD
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "${ANDROID_HOME}/cmdline-tools" -name sdkmanager -type f | head -n 1)"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Install Gradle distribution
+        run: |
+          curl --retry 3 --retry-delay 2 -fsSL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+      - name: Assemble Android player
+        run: |
+          /tmp/gradle-8.7/bin/gradle --no-daemon -p auralis assembleDebug testDebugUnitTest
