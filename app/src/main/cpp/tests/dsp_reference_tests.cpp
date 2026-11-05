@@ -194,10 +194,10 @@ int main() {
     float in[]={0.2f,-0.1f,0.3f,-0.2f,0.4f,-0.3f};
     check(ring.push(in,3),"Audio ring accepts a three-frame block");
     float first[2]{}, rest[4]{};
-    check(ring.pop(first,1)==1 && near(first[0],0.2) && near(first[1],-0.1),
+    check(ring.pop(first,1)==1 && near(first[0],0.2,1e-6) && near(first[1],-0.1,1e-6),
           "Audio ring returns the first frame on a partial read");
-    check(ring.pop(rest,2)==2 && near(rest[0],0.3) && near(rest[1],-0.2) &&
-          near(rest[2],0.4) && near(rest[3],-0.3),"Audio ring preserves and returns unread tail");
+    check(ring.pop(rest,2)==2 && near(rest[0],0.3,1e-6) && near(rest[1],-0.2,1e-6) &&
+          near(rest[2],0.4,1e-6) && near(rest[3],-0.3,1e-6),"Audio ring preserves and returns unread tail");
     check(ring.empty(),"Audio ring empties only after the whole block is consumed");
 
     AudioPipeline pipeline(48000);
