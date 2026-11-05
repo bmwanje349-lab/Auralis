@@ -29,6 +29,8 @@ class PlaybackService : Service() {
     inner class LocalBinder : Binder() { fun service(): PlaybackService = this@PlaybackService }
 
     private val binder = LocalBinder()
+    // Serializes configuration producers only; the native DSP consumer never takes this lock.
+    private val configLock = Any()
     @Volatile private var session: PlaybackSession? = null
     @Volatile private var stereoEnabled = false
     @Volatile private var stereoPercent = 0.0
@@ -56,16 +58,20 @@ class PlaybackService : Service() {
     fun stopPlayback() { stopCurrent() }
 
     fun setStereoWide(enabled: Boolean, percent: Int) {
-        stereoEnabled = enabled
-        stereoPercent = percent.coerceIn(0, 100).toDouble()
-        session?.engine?.setStereoWide(stereoEnabled, stereoPercent)
+        synchronized(configLock) {
+            stereoEnabled = enabled
+            stereoPercent = percent.coerceIn(0, 100).toDouble()
+            session?.engine?.setStereoWide(stereoEnabled, stereoPercent)
+        }
     }
 
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int,
                   q: Double, gainDb: Double, channel: Int = 0): Boolean {
-        val setting = EqSetting(index, enabled, type, frequencyHz, q, gainDb, channel)
-        eqSettings[index] = setting
-        return session?.engine?.setEqBand(index, enabled, type, frequencyHz, q, gainDb, channel) ?: true
+        synchronized(configLock) {
+            val setting = EqSetting(index, enabled, type, frequencyHz, q, gainDb, channel)
+            eqSettings[index] = setting
+            return session?.engine?.setEqBand(index, enabled, type, frequencyHz, q, gainDb, channel) ?: true
+        }
     }
 
     private fun prepareAndStart(s: PlaybackSession) {
@@ -98,10 +104,14 @@ class PlaybackService : Service() {
             s.extractor = extractor
             s.codec = codec
             val nativeEngine = NativeAudioEngine(sampleRate)
-            nativeEngine.setStereoWide(stereoEnabled, stereoPercent)
-            s.engine = nativeEngine
-            eqSettings.values.forEach { e ->
-                nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
+            synchronized(configLock) {
+                nativeEngine.setStereoWide(stereoEnabled, stereoPercent)
+                eqSettings.values.forEach { e ->
+                    nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
+                }
+                // Publish the engine after initial controls are queued. Thereafter UI changes
+                // are the sole producer and the DSP thread remains the sole consumer.
+                s.engine = nativeEngine
             }
             val minBytes = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
             val bufferBytes = max(if (minBytes > 0) minBytes else 16384, sampleRate * 2 * 4 / 4)
