@@ -17,7 +17,9 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_com_auralis_NativeAudioEngine_nativeEnqueueInput(JNIEnv* env, jclass, jlong handle, jobject buffer, jint frames) {
     auto* p = reinterpret_cast<AudioPipeline*>(handle);
     auto* data = static_cast<float*>(env->GetDirectBufferAddress(buffer));
-    if (!p || !data || frames <= 0 || frames > auralis::kChunkFrames) return JNI_FALSE;
+    const jlong capacityBytes = env->GetDirectBufferCapacity(buffer);
+    if (!p || !data || frames <= 0 || frames > auralis::kChunkFrames ||
+        capacityBytes < static_cast<jlong>(frames) * 2 * static_cast<jlong>(sizeof(float))) return JNI_FALSE;
     return p->enqueueInput(data, static_cast<std::size_t>(frames)) ? JNI_TRUE : JNI_FALSE;
 }
 extern "C" JNIEXPORT jint JNICALL
@@ -29,18 +31,15 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_auralis_NativeAudioEngine_nativeDequeueOutput(JNIEnv* env, jclass, jlong handle, jobject buffer, jint capacityFrames) {
     auto* p = reinterpret_cast<AudioPipeline*>(handle);
     auto* data = static_cast<float*>(env->GetDirectBufferAddress(buffer));
-    if (!p || !data || capacityFrames <= 0) return 0;
+    const jlong capacityBytes = env->GetDirectBufferCapacity(buffer);
+    if (!p || !data || capacityFrames <= 0 ||
+        capacityBytes < static_cast<jlong>(capacityFrames) * 2 * static_cast<jlong>(sizeof(float))) return 0;
     return static_cast<jint>(p->dequeueOutput(data, static_cast<std::size_t>(capacityFrames)));
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_auralis_NativeAudioEngine_nativeSetStereoWide(JNIEnv*, jclass, jlong handle, jboolean enabled, jdouble percent) {
     auto* p = reinterpret_cast<AudioPipeline*>(handle);
     if (p) p->setStereoWide(enabled == JNI_TRUE, percent);
-}
-extern "C" JNIEXPORT void JNICALL
-Java_com_auralis_NativeAudioEngine_nativeSetLimiter(JNIEnv*, jclass, jlong handle, jboolean enabled, jint path, jdouble threshold) {
-    auto* p = reinterpret_cast<AudioPipeline*>(handle);
-    if (p) p->setLimiter(enabled == JNI_TRUE, path, threshold);
 }
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_auralis_NativeAudioEngine_nativeSetEqBand(JNIEnv*, jclass, jlong handle, jint index, jboolean enabled,

@@ -30,7 +30,6 @@ class MainActivity : Activity() {
     private lateinit var stereoToggle: CheckBox
     private lateinit var stereoValue: TextView
     private lateinit var stereoSlider: SeekBar
-    private lateinit var limiterToggle: CheckBox
     private val eqControls = mutableListOf<EqUiControl>()
 
     private val connection = object : ServiceConnection {
@@ -137,18 +136,9 @@ class MainActivity : Activity() {
         }
         page.addView(stereoSlider, matchWrap())
 
-        addSection(page, "LIMITER", "Linked stereo peak protection · recovered attack/release steps")
-        limiterToggle = CheckBox(this).apply {
-            text = "Enable built-in limiter"
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked -> playback?.setLimiter(checked) }
-        }
-        page.addView(limiterToggle)
-
         addSection(page, "PARAMETRIC EQ", "64-band native engine · six recovered biquad filter types")
         addEqBand(page, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
-        addEqBand(page, "Presence peak · 1,000 Hz · Q 1.0", 1, 3, 1000, 1.0)
-        addEqBand(page, "Treble shelf · 10,000 Hz · Q 0.6", 2, 5, 10000, 0.6)
+        addEqBand(page, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
 
         page.addView(TextView(this).apply {
             text = "Auralis uses Android's supported media decoders and native Float32 stereo processing. DSP coefficients and the StereoWide mapping are implemented from the supplied Poweramp research record."
@@ -247,7 +237,6 @@ class MainActivity : Activity() {
 
     private fun syncControls() {
         playback?.setStereoWide(stereoToggle.isChecked, stereoSlider.progress)
-        playback?.setLimiter(limiterToggle.isChecked)
         eqControls.forEach { c ->
             val db = (c.gain.progress - 150) / 10.0
             playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, 0)

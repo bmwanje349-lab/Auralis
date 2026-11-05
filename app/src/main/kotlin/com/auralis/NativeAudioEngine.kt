@@ -14,7 +14,6 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
     fun processOne(): Int = nativeProcessOne(handle)
     fun dequeueOutput(buffer: ByteBuffer, capacityFrames: Int): Int = nativeDequeueOutput(handle, buffer, capacityFrames)
     fun setStereoWide(enabled: Boolean, sliderPercent: Double) = nativeSetStereoWide(handle, enabled, sliderPercent)
-    fun setLimiter(enabled: Boolean, path: Int = 0, threshold: Double = 1.0) = nativeSetLimiter(handle, enabled, path, threshold)
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int, q: Double, gainDb: Double, channel: Int = 0): Boolean =
         nativeSetEqBand(handle, index, enabled, type, frequencyHz, q, gainDb, channel)
 
@@ -35,7 +34,6 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
         @JvmStatic private external fun nativeProcessOne(handle: Long): Int
         @JvmStatic private external fun nativeDequeueOutput(handle: Long, buffer: ByteBuffer, capacityFrames: Int): Int
         @JvmStatic private external fun nativeSetStereoWide(handle: Long, enabled: Boolean, sliderPercent: Double)
-        @JvmStatic private external fun nativeSetLimiter(handle: Long, enabled: Boolean, path: Int, threshold: Double)
         @JvmStatic private external fun nativeSetEqBand(handle: Long, index: Int, enabled: Boolean, type: Int,
                                                         frequencyHz: Int, q: Double, gainDb: Double, channel: Int): Boolean
     }

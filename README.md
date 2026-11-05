@@ -18,7 +18,8 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - Decode using Android `MediaExtractor` and `MediaCodec`.
 - Keep decode, native DSP, and `AudioTrack` output on separate worker threads.
 - Process interleaved stereo Float32 blocks using preallocated lock-free SPSC queues.
-- Apply the recovered StereoWide mapping, native biquad EQ families, and linked limiter envelope increments.
+- Apply the recovered StereoWide mapping and the six recovered biquad EQ families.
+- Preserve ReplayGain and limiter-envelope equations as standalone models where specified. The limiter target detector is not guessed into the playback signal path.
 - Keep UI-to-DSP changes in a bounded lock-free control queue so the DSP worker does not take a UI mutex.
 
 ## Reference fidelity

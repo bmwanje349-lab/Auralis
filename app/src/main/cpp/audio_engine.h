@@ -4,14 +4,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 namespace auralis {
 
 constexpr int kMaxEqBands = 64;
 constexpr int kChunkFrames = 1024;
 constexpr int kQueueSlots = 8;
-constexpr int kMaxDelaySamples = 192000; // 4 seconds at 48 kHz; bounded allocation at init.
 
 enum class EqFilterType : int { LowPass = 0, HighPass = 1, BandPass = 2, Peaking = 3, LowShelf = 4, HighShelf = 5 };
 
@@ -20,8 +18,9 @@ enum class LimiterPath : int { HardCeiling = 0, ConfigurableThreshold = 1 };
 enum class ResamplerMode : int { Fast = 0x11, Balanced = 0x1F };
 
 enum class DitherMode : int {
-    None, Rectangular, Triangular, TriangularHighPass,
-    NoiseShapingFWeighted, ModifiedEWeighted, ImprovedEWeighted, Shibata, LowShibata
+    None = 1, Rectangular = 2, Triangular = 3, TriangularHighPass = 4,
+    NoiseShapingFWeighted = 5, ModifiedEWeighted = 6, ImprovedEWeighted = 7,
+    Shibata = 8, LowShibata = 9
 };
 
 struct BiquadCoefficients {
@@ -75,16 +74,19 @@ private:
 
 class Limiter {
 public:
-    void configure(bool enabled, LimiterPath path, double configurableCeiling) noexcept;
+    void configure(bool enabled, LimiterPath path, double configurableThreshold) noexcept;
     void reset() noexcept;
-    void process(float* interleavedStereo, std::size_t frames) noexcept;
+    // Apply the recovered envelope law to an already-derived G_target. The reference
+    // does not fully specify the target detector, so this model does not invent one.
+    double advance(double targetGain) noexcept;
     double gain() const noexcept { return path_ == LimiterPath::HardCeiling ? hardGain_ : thresholdGain_; }
+    double configurableThreshold() const noexcept { return configurableThreshold_; }
     static constexpr double kAttackStep = 1.0 / 256.0;
     static constexpr double kReleaseStep = 1.0 / 16384.0;
 private:
     bool enabled_ = false;
     LimiterPath path_ = LimiterPath::HardCeiling;
-    double configurableCeiling_ = 1.0;
+    double configurableThreshold_ = 1.0;
     double hardGain_ = 1.0;
     double thresholdGain_ = 1.0;
 };
@@ -108,15 +110,18 @@ struct ReverbParameters {
     double mix = 0.0;
     double preDelayMix = 0.0;
     double damp = 1.0;
-    bool flag = false;
-    std::array<int, 8> delaySamples{};
+    // Requested sample counts from Fs * delaySeconds * Size. The native allocated-buffer
+    // capacity is not in the supplied reference, so this model does not invent one.
+    std::array<std::int64_t, 8> delaySamples{};
 };
 
 class ReverbControlModel {
 public:
     explicit ReverbControlModel(int sampleRate = 48000) noexcept;
     void setSampleRate(int sampleRate) noexcept;
-    // Native setter indices 0..6 are parameters; index 7 is a flag operation, never a p6 alias.
+    // Indices 0..6 map to recovered parameters. Index 7 is a flag operation whose bit
+    // semantics are not supplied; it does not write a parameter field in this model.
+    static constexpr int kNativeFlagOperationIndex = 7;
     void setNativeParameter(int index, double value) noexcept;
     const ReverbParameters& parameters() const noexcept { return params_; }
     static constexpr std::array<double, 8> kDelaySeconds = {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110};
@@ -131,7 +136,6 @@ class AuralisDsp {
 public:
     explicit AuralisDsp(int sampleRate);
     void setStereoWide(bool enabled, double sliderPercent) noexcept;
-    void setLimiter(bool enabled, int path, double threshold) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
                    double gainDb, int channel) noexcept;
     void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
@@ -145,7 +149,6 @@ private:
     int sampleRate_;
     std::array<EqBand, kMaxEqBands> bands_{};
     StereoWide stereoWide_{};
-    Limiter limiter_{};
     ReplayGain replayGain_{};
     ReplayGainMetadata replayGainMetadata_{};
     ReverbControlModel reverb_;
@@ -165,6 +168,7 @@ private:
     struct Slot {
         std::array<float, kChunkFrames * 2> samples{};
         std::uint32_t frames = 0;
+        std::uint32_t readOffsetFrames = 0;
     };
     std::array<Slot, kQueueSlots> slots_{};
     alignas(64) std::atomic<std::uint32_t> head_{0};
@@ -181,10 +185,9 @@ public:
     bool inputEmpty() const noexcept { return input_.empty(); }
     // UI/configuration thread publishes commands; the DSP thread applies them between blocks.
     void setStereoWide(bool enabled, double percent) noexcept;
-    void setLimiter(bool enabled, int path, double threshold) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
 private:
-    struct ControlCommand { int kind=0, i0=0, i1=0, i2=0; double d0=0.0, d1=0.0; bool b0=false; };
+    struct ControlCommand { int kind=0, i0=0, i1=0, i2=0, i3=0; double d0=0.0, d1=0.0; bool b0=false; };
     bool publish(const ControlCommand& command) noexcept;
     void applyPendingControls() noexcept;
     std::array<ControlCommand, 128> controls_{};
@@ -197,6 +200,7 @@ private:
 };
 
 // Recovered configuration data which can be represented exactly without claiming an unknown kernel.
+constexpr int kDefaultResamplerCutoffPercent = 97;
 constexpr std::array<int, 5> kP2dResamplerR = {8, 16, 32, 64, 128};
 constexpr std::array<int, 2> kP2dResamplerN = {3, 4};
 constexpr std::array<double, 6> kDsd64Coefficients = {
@@ -217,6 +221,11 @@ constexpr DsdRatePair kDsd48Family{3072000, 6144000, 12288000, 24576000, 4915200
 double clampRecoveredTempo(double factor) noexcept;
 // Resampler cutoff preference bounds/default are recovered; the exact SoX/P2D kernel is not part of this model.
 int clampRecoveredResamplerCutoff(int cutoffPercent) noexcept;
+constexpr int kDefaultNoDvcHeadroomMb = -600;
+constexpr int kMinimumNoDvcHeadroomMb = -1000;
+constexpr int kMaximumNoDvcHeadroomMb = 0;
+constexpr int kNoDvcHeadroomStepMb = 50;
+constexpr int kBorderGainThresholdMb = -298;
 int recoveredNoDvcHeadroomMb(int valueMb) noexcept;
 double recoveredBorderGainCeilingDb(double s) noexcept;
 

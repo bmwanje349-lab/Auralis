@@ -81,8 +81,8 @@ double evaluateBiquadMagnitudeDb(const BiquadCoefficients& c, double frequencyHz
 void ReplayGain::configure(int type, int source, int defaultGainMb, int preampMb) noexcept {
     type_ = (type >= 0 && type <= 2) ? type : 0;
     source_ = (source == 1) ? 1 : 0;
-    defaultGainMb_ = std::clamp(defaultGainMb, -20000, 16000);
-    preampMb_ = std::clamp(preampMb, -20000, 16000);
+    defaultGainMb_ = defaultGainMb;
+    preampMb_ = preampMb;
 }
 
 double ReplayGain::dbToLinear(double db) noexcept { return std::pow(10.0, db / 20.0); }
@@ -108,24 +108,18 @@ double ReplayGain::linearGain(const ReplayGainMetadata& m) const noexcept {
     return millibelsToLinear(appliedMb);
 }
 
-void Limiter::configure(bool enabled, LimiterPath path, double configurableCeiling) noexcept {
+void Limiter::configure(bool enabled, LimiterPath path, double configurableThreshold) noexcept {
     enabled_ = enabled;
     path_ = path;
-    configurableCeiling_ = clampd(configurableCeiling, 0.01, 1.0);
+    configurableThreshold_ = configurableThreshold;
 }
 void Limiter::reset() noexcept { hardGain_ = 1.0; thresholdGain_ = 1.0; }
-void Limiter::process(float* x, std::size_t frames) noexcept {
-    if (!enabled_ || x == nullptr) return;
-    const double ceiling = path_ == LimiterPath::HardCeiling ? 1.0 : configurableCeiling_;
-    double& gain = path_ == LimiterPath::HardCeiling ? hardGain_ : thresholdGain_;
-    for (std::size_t i = 0; i < frames; ++i) {
-        const double peak = std::max(std::abs(static_cast<double>(x[2 * i])), std::abs(static_cast<double>(x[2 * i + 1])));
-        const double target = peak > ceiling ? ceiling / peak : 1.0;
-        if (target < gain) gain = std::max(target, gain - kAttackStep);
-        else gain = std::min(1.0, gain + kReleaseStep);
-        x[2 * i] = static_cast<float>(static_cast<double>(x[2 * i]) * gain);
-        x[2 * i + 1] = static_cast<float>(static_cast<double>(x[2 * i + 1]) * gain);
-    }
+double Limiter::advance(double targetGain) noexcept {
+    double& current = path_ == LimiterPath::HardCeiling ? hardGain_ : thresholdGain_;
+    if (!enabled_) return current;
+    if (targetGain < current) current = std::max(targetGain, current - kAttackStep);
+    else current = std::min(1.0, current + kReleaseStep);
+    return current;
 }
 
 void StereoWide::configure(bool enabled, double sliderPercent) noexcept {
@@ -162,7 +156,7 @@ void ReverbControlModel::setSampleRate(int sampleRate) noexcept {
     recalculateDelays();
 }
 void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
-    value = clampd(value, 0.0, 1.0);
+    if (index == kNativeFlagOperationIndex) return;
     switch (index) {
         case 0: params_.size = 0.01 + 0.99 * value; break;
         case 1: params_.filter = value; break;
@@ -171,7 +165,6 @@ void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
         case 4: params_.mix = value; break;
         case 5: params_.preDelayMix = value; break;
         case 6: params_.damp = 1.0 - value; break;
-        case 7: params_.flag = value >= 0.5; break;
         default: return;
     }
     recalculateDelays();
@@ -179,15 +172,21 @@ void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
 void ReverbControlModel::recalculateDelays() noexcept {
     for (std::size_t i = 0; i < kDelaySeconds.size(); ++i) {
         const double raw = static_cast<double>(sampleRate_) * kDelaySeconds[i] * params_.size;
-        params_.delaySamples[i] = std::clamp(static_cast<int>(raw), 1, kMaxDelaySamples);
+        if (!std::isfinite(raw)) {
+            params_.delaySamples[i] = raw < 0.0 ? std::numeric_limits<std::int64_t>::min()
+                                                : std::numeric_limits<std::int64_t>::max();
+        } else if (raw >= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+            params_.delaySamples[i] = std::numeric_limits<std::int64_t>::max();
+        } else if (raw <= static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
+            params_.delaySamples[i] = std::numeric_limits<std::int64_t>::min();
+        } else {
+            params_.delaySamples[i] = static_cast<std::int64_t>(raw);
+        }
     }
 }
 
 AuralisDsp::AuralisDsp(int sampleRate) : sampleRate_(std::max(1, sampleRate)), reverb_(sampleRate_) {}
 void AuralisDsp::setStereoWide(bool enabled, double percent) noexcept { stereoWide_.configure(enabled, percent); }
-void AuralisDsp::setLimiter(bool enabled, int path, double threshold) noexcept {
-    limiter_.configure(enabled, path == 1 ? LimiterPath::ConfigurableThreshold : LimiterPath::HardCeiling, threshold);
-}
 bool AuralisDsp::setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
                            double gainDb, int channel) noexcept {
     if (index < 0 || index >= kMaxEqBands || type < 0 || type > 5 || channel < 0 || channel > 2) return false;
@@ -206,8 +205,8 @@ void AuralisDsp::setReplayGain(int type, int source, int defaultGainMb, int prea
     replayGain_.configure(type, source, defaultGainMb, preampMb);
 }
 void AuralisDsp::setReplayGainMetadata(const ReplayGainMetadata& m) noexcept { replayGainMetadata_ = m; }
-void AuralisDsp::setEqPreampDb(double db) noexcept { eqPreampLinear_ = ReplayGain::dbToLinear(clampd(db, -15.0, 15.0)); }
-void AuralisDsp::setMasterGainDb(double db) noexcept { masterGainLinear_ = ReplayGain::dbToLinear(clampd(db, -120.0, 12.0)); }
+void AuralisDsp::setEqPreampDb(double db) noexcept { eqPreampLinear_ = ReplayGain::dbToLinear(db); }
+void AuralisDsp::setMasterGainDb(double db) noexcept { masterGainLinear_ = ReplayGain::dbToLinear(db); }
 void AuralisDsp::process(float* x, std::size_t frames) noexcept {
     if (x == nullptr) return;
     const double trackGain = replayGain_.linearGain(replayGainMetadata_);
@@ -223,7 +222,6 @@ void AuralisDsp::process(float* x, std::size_t frames) noexcept {
         }
     }
     stereoWide_.process(x, frames);
-    limiter_.process(x, frames);
 }
 
 AudioRing::AudioRing() = default;
@@ -235,6 +233,7 @@ bool AudioRing::push(const float* x, std::size_t frames) noexcept {
     Slot& slot = slots_[head % kQueueSlots];
     std::copy_n(x, frames * 2, slot.samples.data());
     slot.frames = static_cast<std::uint32_t>(frames);
+    slot.readOffsetFrames = 0;
     head_.store(head + 1, std::memory_order_release);
     return true;
 }
@@ -244,9 +243,11 @@ std::size_t AudioRing::pop(float* x, std::size_t capacityFrames) noexcept {
     const std::uint32_t head = head_.load(std::memory_order_acquire);
     if (tail == head) return 0;
     Slot& slot = slots_[tail % kQueueSlots];
-    const std::size_t frames = std::min<std::size_t>(slot.frames, capacityFrames);
-    std::copy_n(slot.samples.data(), frames * 2, x);
-    tail_.store(tail + 1, std::memory_order_release);
+    const std::size_t remaining = static_cast<std::size_t>(slot.frames - slot.readOffsetFrames);
+    const std::size_t frames = std::min(remaining, capacityFrames);
+    std::copy_n(slot.samples.data() + static_cast<std::size_t>(slot.readOffsetFrames) * 2, frames * 2, x);
+    slot.readOffsetFrames += static_cast<std::uint32_t>(frames);
+    if (slot.readOffsetFrames == slot.frames) tail_.store(tail + 1, std::memory_order_release);
     return frames;
 }
 bool AudioRing::empty() const noexcept {
@@ -270,15 +271,10 @@ bool AudioPipeline::publish(const ControlCommand& c) noexcept {
 void AudioPipeline::setStereoWide(bool enabled, double percent) noexcept {
     ControlCommand c{}; c.kind = 1; c.b0 = enabled; c.d0 = percent; (void)publish(c);
 }
-void AudioPipeline::setLimiter(bool enabled, int path, double threshold) noexcept {
-    ControlCommand c{}; c.kind = 2; c.b0 = enabled; c.i0 = path; c.d0 = threshold; (void)publish(c);
-}
 bool AudioPipeline::setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept {
     if (index < 0 || index >= kMaxEqBands) return false;
-    ControlCommand c{}; c.kind = 3; c.i0 = index; c.i1 = type; c.i2 = frequencyHz; c.b0 = enabled;
+    ControlCommand c{}; c.kind = 2; c.i0 = index; c.i1 = type; c.i2 = frequencyHz; c.i3 = channel; c.b0 = enabled;
     c.d0 = q; c.d1 = gainDb;
-    // Channel is kept in the top byte of the command's otherwise unused signed field.
-    c.i2 = (frequencyHz & 0x00FFFFFF) | ((channel & 0xFF) << 24);
     return publish(c);
 }
 void AudioPipeline::applyPendingControls() noexcept {
@@ -289,12 +285,7 @@ void AudioPipeline::applyPendingControls() noexcept {
         const ControlCommand c = controls_[tail % controls_.size()];
         controlTail_.store(tail + 1, std::memory_order_release);
         if (c.kind == 1) dsp_.setStereoWide(c.b0, c.d0);
-        else if (c.kind == 2) dsp_.setLimiter(c.b0, c.i0, c.d0);
-        else if (c.kind == 3) {
-            const int frequency = c.i2 & 0x00FFFFFF;
-            const int channel = (c.i2 >> 24) & 0xFF;
-            (void)dsp_.setEqBand(c.i0, c.b0, c.i1, frequency, c.d0, c.d1, channel);
-        }
+        else if (c.kind == 2) (void)dsp_.setEqBand(c.i0, c.b0, c.i1, c.i2, c.d0, c.d1, c.i3);
     }
 }
 bool AudioPipeline::enqueueInput(const float* x, std::size_t frames) noexcept { return input_.push(x, frames); }
@@ -320,7 +311,7 @@ int recoveredNoDvcHeadroomMb(int valueMb) noexcept {
 double recoveredBorderGainCeilingDb(double s) noexcept { return 12.5 - s / 120.0; }
 
 double recoveredBalanceAttenuation(double magnitude) noexcept {
-    return std::pow(10.0, -48.0 * clampd(std::abs(magnitude), 0.0, 1.0) / 20.0);
+    return std::pow(10.0, -48.0 * std::abs(magnitude) / 20.0);
 }
 double recoveredDsdCutoff(double ratio) noexcept {
     if (ratio >= 0.833) return 0.85;

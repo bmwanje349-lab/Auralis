@@ -21,7 +21,7 @@ jobs:
         run: |
           cmake -S auralis/app/src/main/cpp -B auralis/build-native -DCMAKE_BUILD_TYPE=Release
           cmake --build auralis/build-native --parallel 2
-          ctest --test-dir auralis/build-native --output-on-failure
+          ctest --test-dir auralis/build-native --output-on-failure --verbose
 
   android-debug-build:
     runs-on: ubuntu-latest

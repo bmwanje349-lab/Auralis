@@ -32,7 +32,6 @@ class PlaybackService : Service() {
     @Volatile private var session: PlaybackSession? = null
     @Volatile private var stereoEnabled = false
     @Volatile private var stereoPercent = 0.0
-    @Volatile private var limiterEnabled = false
     private val eqSettings = ConcurrentHashMap<Int, EqSetting>()
 
     override fun onCreate() {
@@ -60,11 +59,6 @@ class PlaybackService : Service() {
         stereoEnabled = enabled
         stereoPercent = percent.coerceIn(0, 100).toDouble()
         session?.engine?.setStereoWide(stereoEnabled, stereoPercent)
-    }
-
-    fun setLimiter(enabled: Boolean) {
-        limiterEnabled = enabled
-        session?.engine?.setLimiter(enabled, 0, 1.0)
     }
 
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int,
@@ -104,7 +98,6 @@ class PlaybackService : Service() {
             s.codec = codec
             val nativeEngine = NativeAudioEngine(sampleRate)
             nativeEngine.setStereoWide(stereoEnabled, stereoPercent)
-            nativeEngine.setLimiter(limiterEnabled, 0, 1.0)
             s.engine = nativeEngine
             eqSettings.values.forEach { e ->
                 nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
@@ -266,7 +259,7 @@ class PlaybackService : Service() {
     }
 
     private fun readPcmSample(buffer: ByteBuffer, encoding: Int): Float = when (encoding) {
-        AudioFormat.ENCODING_PCM_FLOAT -> buffer.float.coerceIn(-1.0f, 1.0f)
+        AudioFormat.ENCODING_PCM_FLOAT -> buffer.float
         AudioFormat.ENCODING_PCM_8BIT -> ((buffer.get().toInt() and 0xFF) - 128) / 128.0f
         AudioFormat.ENCODING_PCM_24BIT_PACKED -> {
             val b0 = buffer.get().toInt() and 0xFF
