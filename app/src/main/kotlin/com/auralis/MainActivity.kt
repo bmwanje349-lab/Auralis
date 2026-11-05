@@ -1,6 +1,7 @@
 package com.auralis
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -12,14 +13,19 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.provider.OpenableColumns
+import android.text.InputType
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 
 class MainActivity : Activity() {
     private var playback: PlaybackService? = null
@@ -30,6 +36,8 @@ class MainActivity : Activity() {
     private lateinit var stereoToggle: CheckBox
     private lateinit var stereoValue: TextView
     private lateinit var stereoSlider: SeekBar
+    private lateinit var eqContainer: LinearLayout
+    private lateinit var eqCount: TextView
     private val eqControls = mutableListOf<EqUiControl>()
 
     private val connection = object : ServiceConnection {
@@ -77,8 +85,10 @@ class MainActivity : Activity() {
             setPadding(0, dp(3), 0, dp(20))
         })
 
-        val open = Button(this).apply { text = "OPEN AUDIO FILE"; setOnClickListener { chooseAudio() } }
-        page.addView(open, matchWrap())
+        page.addView(Button(this).apply {
+            text = "OPEN AUDIO FILE"
+            setOnClickListener { chooseAudio() }
+        }, matchWrap())
         trackTitle = TextView(this).apply {
             text = "No track selected"
             textSize = 18f
@@ -116,10 +126,12 @@ class MainActivity : Activity() {
         stereoToggle = CheckBox(this).apply {
             text = "Enable StereoWide"
             setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked -> playback?.setStereoWide(checked, stereoSlider.progress) }
+            setOnCheckedChangeListener { _, checked ->
+                playback?.setStereoWide(checked, stereoSlider.progress)
+            }
         }
         page.addView(stereoToggle)
-        stereoValue = label("Side gain: 1.00")
+        stereoValue = label("Slider: 0%    Side gain: 1.00")
         page.addView(stereoValue)
         stereoSlider = SeekBar(this).apply {
             max = 100
@@ -136,12 +148,21 @@ class MainActivity : Activity() {
         }
         page.addView(stereoSlider, matchWrap())
 
-        addSection(page, "PARAMETRIC EQ", "64-band native engine · six recovered biquad filter types")
-        addEqBand(page, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
-        addEqBand(page, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
+        addSection(page, "PARAMETRIC EQ", "Up to 64 bands · recovered six-filter biquad model")
+        eqCount = label("0 / 64 bands")
+        page.addView(eqCount)
+        eqContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        page.addView(eqContainer, matchWrap())
+        addEqBand(eqContainer, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
+        addEqBand(eqContainer, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
+        page.addView(Button(this).apply {
+            text = "ADD PARAMETRIC BAND"
+            setOnClickListener { showAddEqBandDialog() }
+        }, matchWrap().apply { topMargin = dp(10) })
+        updateEqCount()
 
         page.addView(TextView(this).apply {
-            text = "Auralis uses Android's supported media decoders and native Float32 stereo processing. DSP coefficients and the StereoWide mapping are implemented from the supplied Poweramp research record."
+            text = "This player uses Android media decoding and native Float32 stereo processing. StereoWide and the six EQ coefficient families are implemented from the supplied Poweramp research. Channel code meanings below the documented 0–2 range use Auralis's local UI mapping."
             textSize = 11f
             setTextColor(Color.rgb(143, 160, 170))
             setPadding(0, dp(26), 0, dp(8))
@@ -149,7 +170,15 @@ class MainActivity : Activity() {
         setContentView(scroll)
     }
 
-    private fun addEqBand(parent: LinearLayout, title: String, index: Int, type: Int, frequency: Int, q: Double) {
+    private fun addEqBand(
+        parent: LinearLayout,
+        title: String,
+        index: Int,
+        type: Int,
+        frequency: Int,
+        q: Double,
+        channel: Int = 0
+    ) {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(8), dp(12), dp(10))
@@ -161,12 +190,13 @@ class MainActivity : Activity() {
         }
         val value = label("Gain: 0.0 dB")
         val gain = SeekBar(this).apply { max = 300; progress = 150 }
-        val control = EqUiControl(index, type, frequency, q, toggle, gain, value)
+        val control = EqUiControl(index, type, frequency, q, channel, toggle, gain, value)
         eqControls.add(control)
+
         fun update() {
             val db = (gain.progress - 150) / 10.0
             value.text = "Gain: ${"%.1f".format(db)} dB"
-            playback?.setEqBand(index, toggle.isChecked, type, frequency, q, db, 0)
+            playback?.setEqBand(index, toggle.isChecked, type, frequency, q, db, channel)
         }
         toggle.setOnCheckedChangeListener { _, _ -> update() }
         gain.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -178,6 +208,90 @@ class MainActivity : Activity() {
         box.addView(value)
         box.addView(gain)
         parent.addView(box, matchWrap().apply { topMargin = dp(8) })
+        updateEqCount()
+    }
+
+    private fun showAddEqBandDialog() {
+        if (eqControls.size >= MAX_EQ_BANDS) {
+            Toast.makeText(this, "The recovered model supports 64 bands.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val frequencyInput = EditText(this).apply {
+            hint = "Frequency (1–24000 Hz)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText("1000")
+        }
+        val qInput = EditText(this).apply {
+            hint = "Q (0.1–12)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText("1.0")
+        }
+        val gainInput = EditText(this).apply {
+            hint = "Gain (-15 to +15 dB)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+            setText("0.0")
+        }
+        val typeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, FILTER_LABELS)
+            setSelection(3)
+        }
+        val channelSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, CHANNEL_LABELS)
+            setSelection(0)
+        }
+        form.addView(label("Filter type"))
+        form.addView(typeSpinner, matchWrap())
+        form.addView(label("Frequency in Hz"))
+        form.addView(frequencyInput, matchWrap())
+        form.addView(label("Quality factor"))
+        form.addView(qInput, matchWrap())
+        form.addView(label("Band gain in dB"))
+        form.addView(gainInput, matchWrap())
+        form.addView(label("Channel selection (Auralis-local numeric mapping)"))
+        form.addView(channelSpinner, matchWrap())
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Add parametric EQ band")
+            .setView(form)
+            .setNegativeButton("CANCEL", null)
+            .setPositiveButton("ADD", null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val frequency = frequencyInput.text.toString().trim().toIntOrNull()
+                val q = qInput.text.toString().trim().toDoubleOrNull()
+                val gain = gainInput.text.toString().trim().toDoubleOrNull()
+                val type = typeSpinner.selectedItemPosition
+                val channel = channelSpinner.selectedItemPosition
+
+                when {
+                    frequency == null || frequency !in 1..24000 ->
+                        Toast.makeText(this, "Frequency must be 1–24000 Hz.", Toast.LENGTH_SHORT).show()
+                    q == null || q < 0.1 || q > 12.0 ->
+                        Toast.makeText(this, "Q must be between 0.1 and 12.", Toast.LENGTH_SHORT).show()
+                    gain == null || gain < -15.0 || gain > 15.0 ->
+                        Toast.makeText(this, "Gain must be between -15 and +15 dB.", Toast.LENGTH_SHORT).show()
+                    else -> {
+                        val index = eqControls.size
+                        val title = "${FILTER_SHORT_NAMES[type]} · $frequency Hz · Q ${"%.2f".format(q)}"
+                        addEqBand(eqContainer, title, index, type, frequency, q, channel)
+                        playback?.setEqBand(index, false, type, frequency, q, gain, channel)
+                        dialog.dismiss()
+                    }
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun updateEqCount() {
+        if (::eqCount.isInitialized) eqCount.text = "${eqControls.size} / $MAX_EQ_BANDS bands"
     }
 
     private fun addSection(parent: LinearLayout, title: String, subtitle: String) {
@@ -217,7 +331,9 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_AUDIO || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
-        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: SecurityException) { }
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) { }
         trackTitle.text = displayName(uri)
         status.text = "Preparing decoder…"
         if (playback != null) playback?.load(uri) else pendingUri = uri
@@ -239,7 +355,7 @@ class MainActivity : Activity() {
         playback?.setStereoWide(stereoToggle.isChecked, stereoSlider.progress)
         eqControls.forEach { c ->
             val db = (c.gain.progress - 150) / 10.0
-            playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, 0)
+            playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, c.channel)
         }
     }
 
@@ -254,9 +370,26 @@ class MainActivity : Activity() {
     }
 
     private data class EqUiControl(
-        val index: Int, val type: Int, val frequency: Int, val q: Double,
-        val enabled: CheckBox, val gain: SeekBar, val value: TextView
+        val index: Int,
+        val type: Int,
+        val frequency: Int,
+        val q: Double,
+        val channel: Int,
+        val enabled: CheckBox,
+        val gain: SeekBar,
+        val value: TextView
     )
 
-    companion object { private const val REQUEST_AUDIO = 8201 }
+    companion object {
+        private const val REQUEST_AUDIO = 8201
+        private const val MAX_EQ_BANDS = 64
+        private val FILTER_LABELS = arrayOf(
+            "Low-pass (0)", "High-pass (1)", "Band-pass (2)",
+            "Peaking (3)", "Low shelf (4)", "High shelf (5)"
+        )
+        private val FILTER_SHORT_NAMES = arrayOf(
+            "Low-pass", "High-pass", "Band-pass", "Peaking", "Low shelf", "High shelf"
+        )
+        private val CHANNEL_LABELS = arrayOf("Both channels (0)", "Left channel (1)", "Right channel (2)")
+    }
 }
