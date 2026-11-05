@@ -44,7 +44,7 @@ struct EqBand {
     int frequencyHz = 1000;
     double q = 1.0;
     double gainDb = 0.0;
-    int channel = 0; // 0 = both, 1 = left, 2 = right
+    int channel = 0; // Auralis-local: 0=both, 1=left, 2=right; Poweramp's numeric mapping is not established
     BiquadCoefficients coefficients{};
     BiquadState left{}, right{};
 };
