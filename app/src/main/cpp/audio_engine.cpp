@@ -131,11 +131,12 @@ void StereoWide::process(float* x, std::size_t frames) const noexcept {
     if (!enabled_ || x == nullptr || sideGain_ == 1.0) return;
     const double g = sideGain_;
     for (std::size_t i = 0; i < frames; ++i) {
-        const double l = x[2 * i], r = x[2 * i + 1];
-        const double mid = (l + r) * 0.5;
-        const double side = (l - r) * 0.5;
-        x[2 * i] = static_cast<float>(mid + g * side);
-        x[2 * i + 1] = static_cast<float>(mid - g * side);
+        const float l = x[2 * i], r = x[2 * i + 1];
+        const float gf = static_cast<float>(g);
+        const float mid = (l + r) * 0.5f;
+        const float side = (l - r) * 0.5f;
+        x[2 * i] = mid + gf * side;
+        x[2 * i + 1] = mid - gf * side;
     }
 }
 void StereoWide::process(double* x, std::size_t frames) const noexcept {
@@ -172,16 +173,7 @@ void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
 void ReverbControlModel::recalculateDelays() noexcept {
     for (std::size_t i = 0; i < kDelaySeconds.size(); ++i) {
         const double raw = static_cast<double>(sampleRate_) * kDelaySeconds[i] * params_.size;
-        if (!std::isfinite(raw)) {
-            params_.delaySamples[i] = raw < 0.0 ? std::numeric_limits<std::int64_t>::min()
-                                                : std::numeric_limits<std::int64_t>::max();
-        } else if (raw >= static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
-            params_.delaySamples[i] = std::numeric_limits<std::int64_t>::max();
-        } else if (raw <= static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
-            params_.delaySamples[i] = std::numeric_limits<std::int64_t>::min();
-        } else {
-            params_.delaySamples[i] = static_cast<std::int64_t>(raw);
-        }
+        params_.delaySamples[i] = raw;
     }
 }
 
@@ -272,7 +264,9 @@ void AudioPipeline::setStereoWide(bool enabled, double percent) noexcept {
     ControlCommand c{}; c.kind = 1; c.b0 = enabled; c.d0 = percent; (void)publish(c);
 }
 bool AudioPipeline::setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept {
-    if (index < 0 || index >= kMaxEqBands) return false;
+    if (index < 0 || index >= kMaxEqBands || type < 0 || type > 5 ||
+        frequencyHz < 1 || frequencyHz > 24000 || q < 0.1 || q > 12.0 ||
+        gainDb < -15.0 || gainDb > 15.0 || channel < 0 || channel > 2) return false;
     ControlCommand c{}; c.kind = 2; c.i0 = index; c.i1 = type; c.i2 = frequencyHz; c.i3 = channel; c.b0 = enabled;
     c.d0 = q; c.d1 = gainDb;
     return publish(c);

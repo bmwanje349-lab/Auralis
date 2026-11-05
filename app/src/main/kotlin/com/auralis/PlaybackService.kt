@@ -90,6 +90,7 @@ class PlaybackService : Service() {
             val mime = format.getString(MediaFormat.KEY_MIME) ?: throw IOException("Missing audio MIME type")
             val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
+            if (channels > 2) throw IOException("This stereo DSP path accepts mono or stereo input only")
 
             codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
@@ -233,15 +234,7 @@ class PlaybackService : Service() {
         var framesInChunk = 0
         repeat(frameCount) {
             val left = readPcmSample(pcm, encoding)
-            var right = if (channels > 1) {
-                var sample = 0.0f
-                for (channel in 1 until channels) {
-                    val v = readPcmSample(pcm, encoding)
-                    if (channel == 1) sample = v
-                }
-                sample
-            } else left
-            if (channels == 1) right = left
+            val right = if (channels == 2) readPcmSample(pcm, encoding) else left
             staging.putFloat(left)
             staging.putFloat(right)
             framesInChunk++

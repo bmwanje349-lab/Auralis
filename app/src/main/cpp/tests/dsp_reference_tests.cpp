@@ -134,10 +134,14 @@ int main() {
     ReverbControlModel reverb(48000);
     reverb.setNativeParameter(0,1.0);
     check(near(reverb.parameters().size,1.0),"Reverb Size transform maps UI 1 to native 1");
-    const std::int64_t delays[8]={960,2880,1440,4272,7200,5760,6720,5280};
+    const double delays[8]={960,2880,1440,4272,7200,5760,6720,5280};
     bool allDelays=true;
-    for(int i=0;i<8;++i) allDelays &= reverb.parameters().delaySamples[static_cast<std::size_t>(i)]==delays[i];
-    check(allDelays,"Reverb all eight delay families equal Fs*seconds*Size");
+    for(int i=0;i<8;++i) allDelays &= near(reverb.parameters().delaySamples[static_cast<std::size_t>(i)],delays[i]);
+    check(allDelays,"Reverb all eight delay families equal Fs*seconds*Size without guessed rounding");
+    reverb.setSampleRate(44100);
+    check(near(reverb.parameters().delaySamples[3],44100.0*0.089*0.01),
+          "Reverb sample counts preserve fractional Fs scaling instead of assuming integer rounding");
+    reverb.setSampleRate(48000);
     reverb.setNativeParameter(0,0.0);
     check(near(reverb.parameters().size,0.01),"Reverb Size transform maps UI zero to 0.01");
     reverb.setNativeParameter(1,0.25);
@@ -203,6 +207,8 @@ int main() {
     AudioPipeline pipeline(48000);
     pipeline.setStereoWide(true,100.0);
     float block[]={1.0f,0.0f};
+    check(pipeline.setEqBand(0,true,4,90,0.8,6.0,0),"Pipeline accepts an in-range EQ update");
+    check(!pipeline.setEqBand(0,true,4,90,0.01,6.0,0),"Pipeline rejects EQ Q outside recovered range");
     check(pipeline.enqueueInput(block,1),"Pipeline accepts decoded audio");
     check(pipeline.processOne()==1,"Native DSP stage processes one block");
     float rendered[2]{};

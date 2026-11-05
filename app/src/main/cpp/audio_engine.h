@@ -110,9 +110,9 @@ struct ReverbParameters {
     double mix = 0.0;
     double preDelayMix = 0.0;
     double damp = 1.0;
-    // Requested sample counts from Fs * delaySeconds * Size. The native allocated-buffer
-    // capacity is not in the supplied reference, so this model does not invent one.
-    std::array<std::int64_t, 8> delaySamples{};
+    // Exact Fs * delaySeconds * Size results. Integer conversion and allocated-buffer
+    // clamping belong to the native reverb implementation and are not specified here.
+    std::array<double, 8> delaySamples{};
 };
 
 class ReverbControlModel {
