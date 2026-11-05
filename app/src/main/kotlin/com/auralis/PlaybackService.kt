@@ -31,6 +31,7 @@ class PlaybackService : Service() {
     private val binder = LocalBinder()
     // Serializes configuration producers only; the native DSP consumer never takes this lock.
     private val configLock = Any()
+    private val sessionLock = Any()
     @Volatile private var session: PlaybackSession? = null
     @Volatile private var stereoEnabled = false
     @Volatile private var stereoPercent = 0.0
@@ -49,8 +50,12 @@ class PlaybackService : Service() {
     fun load(uri: Uri) {
         stopCurrent()
         val next = PlaybackSession(uri)
-        session = next
-        Thread({ prepareAndStart(next) }, "Auralis-prepare").start()
+        synchronized(sessionLock) {
+            session = next
+            val thread = Thread({ prepareAndStart(next) }, "Auralis-prepare")
+            next.prepareThread = thread
+            thread.start()
+        }
     }
 
     fun pausePlayback() { session?.audioTrack?.pause() }
@@ -129,21 +134,24 @@ class PlaybackService : Service() {
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
             s.audioTrack = track
-            s.running.set(true)
-            track.play()
-
-            s.dspThread = Thread({ runDsp(s) }, "Auralis-DSP")
-            s.outputThread = Thread({ runOutput(s) }, "Auralis-output")
-            s.decoderThread = Thread({ runDecoder(s, channels) }, "Auralis-decoder")
-            s.dspThread?.start()
-            s.outputThread?.start()
-            s.decoderThread?.start()
-            updateNotification("Playing audio")
+            synchronized(sessionLock) {
+                if (session !== s) throw IOException("Playback request was superseded")
+                s.running.set(true)
+                track.play()
+                s.dspThread = Thread({ runDsp(s) }, "Auralis-DSP")
+                s.outputThread = Thread({ runOutput(s) }, "Auralis-output")
+                s.decoderThread = Thread({ runDecoder(s, channels) }, "Auralis-decoder")
+                s.dspThread?.start()
+                s.outputThread?.start()
+                s.decoderThread?.start()
+                updateNotification("Playing audio")
+            }
         } catch (t: Throwable) {
             s.running.set(false)
             try { codec?.stop() } catch (_: Throwable) { }
             try { codec?.release() } catch (_: Throwable) { }
             try { extractor?.release() } catch (_: Throwable) { }
+            try { s.audioTrack?.release() } catch (_: Throwable) { }
             s.engine?.close()
             if (session === s) updateNotification("Unable to play this audio")
         }
@@ -198,6 +206,7 @@ class PlaybackService : Service() {
                             val outputFormat = decoder.outputFormat
                             pcmEncoding = outputFormat.integerOr(MediaFormat.KEY_PCM_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
                             actualChannels = outputFormat.integerOr(MediaFormat.KEY_CHANNEL_COUNT, sourceChannels).coerceAtLeast(1)
+                            if (actualChannels !in 1..2) throw IOException("Decoder output is not mono or stereo")
                             output.position(info.offset)
                             output.limit(info.offset + info.size)
                             convertPcmToStereo(output.slice().order(ByteOrder.LITTLE_ENDIAN), pcmEncoding, actualChannels,
@@ -210,12 +219,17 @@ class PlaybackService : Service() {
                         val changed = decoder.outputFormat
                         pcmEncoding = changed.integerOr(MediaFormat.KEY_PCM_ENCODING, pcmEncoding)
                         actualChannels = changed.integerOr(MediaFormat.KEY_CHANNEL_COUNT, actualChannels).coerceAtLeast(1)
+                        if (actualChannels !in 1..2) throw IOException("Decoder output is not mono or stereo")
                     }
                 }
             }
             publishStaging()
         } catch (_: Throwable) {
-            // Stop requests and codec shutdown can interrupt dequeue operations; the DSP drains published blocks.
+            // Stop requests and codec shutdown can interrupt dequeue operations.
+            if (s.running.get()) {
+                s.running.set(false)
+                if (session === s) updateNotification("Unable to decode this audio")
+            }
         } finally {
             s.decoderDone.set(true)
             try { decoder.stop() } catch (_: Throwable) { }
@@ -233,6 +247,7 @@ class PlaybackService : Service() {
         flush: () -> Unit,
         s: PlaybackSession
     ) {
+        if (channels !in 1..2) throw IOException("Auralis DSP input must be mono or stereo")
         val bytesPerSample = when (encoding) {
             AudioFormat.ENCODING_PCM_FLOAT, AudioFormat.ENCODING_PCM_32BIT -> 4
             AudioFormat.ENCODING_PCM_24BIT_PACKED -> 3
@@ -317,11 +332,14 @@ class PlaybackService : Service() {
     }
 
     private fun stopCurrent() {
-        val old = session ?: return
-        session = null
-        old.running.set(false)
+        val old = synchronized(sessionLock) {
+            val current = session
+            session = null
+            current?.running?.set(false)
+            current
+        } ?: return
         try { old.audioTrack?.pause(); old.audioTrack?.stop() } catch (_: Throwable) { }
-        listOf(old.decoderThread, old.dspThread, old.outputThread).forEach { thread ->
+        listOf(old.prepareThread, old.decoderThread, old.dspThread, old.outputThread).forEach { thread ->
             if (thread != null && thread !== Thread.currentThread()) {
                 try { thread.join(1200) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
             }
@@ -369,6 +387,7 @@ class PlaybackService : Service() {
         val running = AtomicBoolean(false)
         val decoderDone = AtomicBoolean(false)
         val dspDone = AtomicBoolean(false)
+        @Volatile var prepareThread: Thread? = null
         @Volatile var extractor: MediaExtractor? = null
         @Volatile var codec: MediaCodec? = null
         @Volatile var engine: NativeAudioEngine? = null
