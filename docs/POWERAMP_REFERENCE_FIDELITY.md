@@ -30,6 +30,15 @@ Native context layout: `+0xEC` applied gain; `+0xF0` target envelope; `+0xF4` co
 
 The configurable ceiling is recalculated from the accumulated upstream linear gain: when that gain exceeds 0.001 the setter writes its reciprocal to `+0xF4`; otherwise it writes the unbounded sentinel 999.999. Auralis currently derives that gain from the ReplayGain, EQ-preamp and master-gain values represented in its playback graph. The native Poweramp graph also includes no-DVC and per-track gain fields; those two gain sources have not yet been connected to Auralis's player metadata/settings.
 
+### Balance and Mono — native DSPI sample processing
+
+- Balance input is clamped to `[-1,+1]`.
+- Gain law: `G=10^(-48*abs(b)/20)`.
+- Positive balance activates the left-channel attenuation branch; negative balance activates the right-channel branch.
+- Mono uses `M=(L+R)/2` and writes `M` to both output channels.
+- The native DSPI callback applies Mono before Balance; Auralis preserves that relative order.
+- Both controls are connected to the audio path and covered by native unit tests.
+
 ### ReplayGain — recovered preference and gain law
 
 - Type: none / apply / apply-peak.
