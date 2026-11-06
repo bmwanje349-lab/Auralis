@@ -53,11 +53,15 @@ The player currently delegates decoding to Android's media stack; it does not ye
 
 ### Reverb parameter model and delay geometry
 
-The native control model preserves indices 0–6, Size transform `0.01+0.99*UI`, Damp transform `1-UI`, identity mapping for Filter/Fade/Pre-delay/Mix/Pre-delay-Mix, all eight delay-time families and all six recovered combining constants. Delay samples remain exact `Fs × delaySeconds × transformedSize` products; the native integer conversion, allocated-buffer capacity and ring-wrap limits are not represented as exact in Auralis.
+Auralis's Reverb control model now follows the native setter's parameter contract: inputs are clamped to `[0,1]`; Size maps as `0.01+0.99*UI`; Damp maps as `1-UI`; Filter, Fade, Pre-delay, Mix and Pre-delay-Mix are identity values. The eighth service slot is not a user parameter: the Java service sends eight slots, but native setter index 7 only writes update flag 1 and does not store a p8 field.
 
-The native setter's update flag is also recovered: Size (index 0) and Pre-delay (index 3) write flag value 2; Filter, Fade, Mix, Pre-delay Mix and Damp (indices 1,2,4,5,6) write 1; index 7 writes flag value 1 without changing any parameter field. Auralis now records this last native flag operation.
+The native allocator at `0x16BF40` establishes four buffer-capacity families, independent of the Size control: four rings at 12.7 ms, six at 89 ms, four at 150 ms, and one at 200 ms. Lengths use float32 `Fs × seconds` followed by ARM `FCVTAS` rounding (nearest, ties away from zero); backing storage is 64-byte aligned and uses 16-sample-aligned strides. Auralis exposes these recovered buffer lengths in its reference model. They must not be confused with eight Size-scaled echo taps.
 
-The callback has three internal processing modes (context mode field `+0xD44` values 1–3), uses eight stereo delay branches, separate vector/scalar/block paths, branch-energy and amplitude calculations, weighted feedback, and smoothed control state. The native source also uses aligned buffers and mode-specific layouts. The entire recursive read/write recurrence, exact delay-index rounding, mode-selection control and all parameter-to-coefficient mappings are not yet reproduced in Auralis, so no “Poweramp Reverb” audio processor is enabled or claimed.
+The audible Reverb processor is the in-place sample kernel at `0x168940`, with format/rate adapters around it. Its first four serial all-pass cells share the 12.7 ms ring capacity and use feedback gains `0.75, 0.75, 0.625, 0.625`. Each cell follows `y = g*x - delayed`, then writes `x + g*y` to its ring. The allocator also provides the longer ring families for the later cross-coupled network.
+
+Important distinction: the three branches selected by context field `+0xD44` belong to the auxiliary callback at `0x16C3A0`. That callback processes 512-sample analysis blocks and writes spectral/energy data consumed by the visualizer; it is not the audible Reverb kernel. Auralis does not label those visualization branches as audio-processing modes.
+
+Auralis now implements the verified parameter clamp and allocator-capacity reference model. The full later cross-coupled wet-signal recurrence, every parameter-to-coefficient conversion, and the complete sample-transition path are not yet reproduced, so the existing code still does not claim a complete Poweramp-equivalent Reverb effect.
 
 ## Retained recovered settings and constants
 
@@ -180,7 +184,11 @@ Java service: `com.maxmpz.audioplayer.plugin.reverb.ReverbPluginService`; base c
 | 6 | p7 Damp | `+0x4AC`; `1 - UI_Damp` |
 | 7 | native flag operation | No parameter-field write; writes update flag value 1 |
 
-Update flags: indices 0 and 3 write value 2; indices 1,2,4,5,6 and 7 write value 1. The eight Size-scaled time constants in seconds are {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110}. The six recovered combining constants are {0.75, 0.75, 0.625, 0.625, 0.25, 0.25}. Delay sample counts in Auralis remain exact `Fs × seconds × transformedSize` products; integer conversion and allocated-buffer capacity clamping are not guessed. Initialization message type 1 carries configuration, type 2 carries parameters; reset zeros parameters and disables; parameter changes clear selected-preset state; float/double entry points share the recovered float-state core. The three-mode delay-network callback is analyzed, but its complete recursive wiring and delay-index/capacity rules are not yet ported, so no reverb effect is claimed.
+Every service value sent to the native setter is clamped to `[0,1]` using native min-number/max-number operations. Update flags: indices 0 (Size) and 3 (Pre-delay) write value 2; indices 1,2,4,5,6 and 7 write value 1. The Java service's eight stored float slots default to zero; the visible panel exposes p1–p7 only. Slot 8 maps to the flag-only native setter index 7, not an eighth audible control.
+
+The allocator initializes 15 delay rings across four capacity families: 4 × `roundFloat32(Fs*0.0127)`, 6 × `roundFloat32(Fs*0.089)`, 4 × `roundFloat32(Fs*0.150)`, and 1 × `roundFloat32(Fs*0.200)` samples. Allocation strides are padded to 16 samples and storage is obtained as a 64-byte-aligned block. The first four rings are serial all-pass cells with feedback gains `{0.75, 0.75, 0.625, 0.625}`; two additional recovered late-network coefficients are `{0.25, 0.25}`.
+
+Initialization message type 1 carries enable/configuration, type 2 carries the one-based parameter slot; reset clears and disables; parameter edits clear the selected-preset reference. The audible sample processor is the separate in-place kernel at `0x168940`; the `+0xD44` mode selector with values 1–3 is in the auxiliary 512-sample analysis callback at `0x16C3A0`, whose output is consumed by visualization. It is not a three-mode wet-audio selector. Auralis implements the parameter contract and ring capacity model, but the complete late-network feedback/cross-coupling and all parameter-dependent coefficient transitions are still not implemented as an audible Reverb effect.
 
 ### EQ Java model, JNI and serialization
 
