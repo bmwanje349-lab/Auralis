@@ -177,6 +177,9 @@ int main() {
     check(near(rg.linearGain(m),0.5,1e-6),"ReplayGain Apply Peak uses min(requested, peak-derived gain)");
 
     // Reverb: exact native parameter clamps/transforms and native ring-capacity families.
+    ReverbControlModel defaultReverb(48000);
+    check(near(defaultReverb.parameters().size,0.01),
+          "Reverb default UI Size 0 transforms to the native internal minimum 0.01");
     ReverbControlModel reverb(48000);
     reverb.setNativeParameter(0,1.0);
     check(near(reverb.parameters().size,1.0) && reverb.lastNativeUpdateFlag()==2,
