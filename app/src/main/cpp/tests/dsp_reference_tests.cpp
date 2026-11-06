@@ -179,7 +179,8 @@ int main() {
     // Reverb: native setter indices, transforms, exact delay geometry; do not assign p8 a guessed meaning.
     ReverbControlModel reverb(48000);
     reverb.setNativeParameter(0,1.0);
-    check(near(reverb.parameters().size,1.0),"Reverb Size transform maps UI 1 to native 1");
+    check(near(reverb.parameters().size,1.0) && reverb.lastNativeUpdateFlag()==2,
+          "Reverb Size maps UI 1 to native 1 and requests native update flag 2");
     const double delays[8]={960,2880,1440,4272,7200,5760,6720,5280};
     bool allDelays=true;
     for(int i=0;i<8;++i) allDelays &= near(reverb.parameters().delaySamples[static_cast<std::size_t>(i)],delays[i]);
@@ -193,19 +194,23 @@ int main() {
     reverb.setNativeParameter(1,0.25);
     reverb.setNativeParameter(2,0.35);
     reverb.setNativeParameter(3,0.45);
+    check(reverb.lastNativeUpdateFlag()==2,"Reverb Pre-delay requests native update flag 2");
     reverb.setNativeParameter(4,0.55);
     reverb.setNativeParameter(5,0.65);
     check(near(reverb.parameters().filter,0.25) && near(reverb.parameters().fade,0.35) &&
           near(reverb.parameters().preDelay,0.45) && near(reverb.parameters().mix,0.55) &&
-          near(reverb.parameters().preDelayMix,0.65),"Reverb indices 1–5 preserve recovered identity mappings");
+          near(reverb.parameters().preDelayMix,0.65) && reverb.lastNativeUpdateFlag()==1,
+          "Reverb indices 1,2,4,5 preserve identity values and request native update flag 1");
     reverb.setNativeParameter(6,0.25);
-    check(near(reverb.parameters().damp,0.75),"Reverb Damp transform equals 1-UI");
+    check(near(reverb.parameters().damp,0.75) && reverb.lastNativeUpdateFlag()==1,
+          "Reverb Damp transform equals 1-UI and requests native update flag 1");
     const auto beforeIndex7=reverb.parameters();
     reverb.setNativeParameter(7,1.0);
     check(near(reverb.parameters().preDelayMix,beforeIndex7.preDelayMix) &&
           near(reverb.parameters().size,beforeIndex7.size) &&
-          near(reverb.parameters().damp,beforeIndex7.damp),
-          "Reverb index 7 is not interpreted as p6 or an invented boolean mapping");
+          near(reverb.parameters().damp,beforeIndex7.damp) &&
+          reverb.lastNativeUpdateFlag()==1,
+          "Reverb index 7 leaves parameter fields unchanged and writes native update flag 1");
     check(ReverbControlModel::kRecoveredConstants[0]==0.75 &&
           ReverbControlModel::kRecoveredConstants[2]==0.625 &&
           ReverbControlModel::kRecoveredConstants[4]==0.25,
