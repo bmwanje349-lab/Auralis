@@ -127,7 +127,7 @@ Recovered plugin indices: Limiter=1, StereoWide=2, Balance=3. Mono and Balance s
 | `+0x4BC` | Reverb Mix |
 | `+0x4C0` | Reverb p6 / Pre-delay Mix destination |
 | `+0x4C4` | Reverb Size |
-| `+0x6C` | DSPI enable flags: hard limiter `0x02`, StereoWide `0x04`, Balance-side `0x08`, opposite Balance-side `0x10`, Mono `0x20`, configurable limiter `0x100` |
+| `+0x6C` | DSPI enable flags: hard limiter `0x02`, StereoWide `0x04`, Mono `0x08`, positive Balance direction `0x10`, negative Balance direction `0x20`, configurable limiter `0x100` |
 | `+0x8C + 32*i` | Per-track volume millibels for record i |
 | `+0xC0` | StereoWide width field |
 | `+0xC4` | EQ preamp |
