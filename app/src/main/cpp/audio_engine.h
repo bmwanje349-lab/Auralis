@@ -152,17 +152,19 @@ class ReverbControlModel {
 public:
     explicit ReverbControlModel(int sampleRate = 48000) noexcept;
     void setSampleRate(int sampleRate) noexcept;
-    // Indices 0..6 map to recovered parameters. Index 7 is a flag operation whose bit
-    // semantics are not supplied; it does not write a parameter field in this model.
+    // Native parameter indices 0..6 update the corresponding fields. Indices 0 and 3
+    // request update flag 2; all remaining indices, including flag-only index 7, write 1.
     static constexpr int kNativeFlagOperationIndex = 7;
     void setNativeParameter(int index, double value) noexcept;
     const ReverbParameters& parameters() const noexcept { return params_; }
+    std::uint32_t lastNativeUpdateFlag() const noexcept { return nativeUpdateFlag_; }
     static constexpr std::array<double, 8> kDelaySeconds = {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110};
     static constexpr std::array<double, 6> kRecoveredConstants = {0.75, 0.75, 0.625, 0.625, 0.25, 0.25};
 private:
     void recalculateDelays() noexcept;
     int sampleRate_ = 48000;
     ReverbParameters params_{};
+    std::uint32_t nativeUpdateFlag_ = 0;
 };
 
 class AuralisDsp {
