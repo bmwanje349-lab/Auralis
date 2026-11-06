@@ -176,45 +176,55 @@ int main() {
     rg.configure(2,1,0,0);
     check(near(rg.linearGain(m),0.5,1e-6),"ReplayGain Apply Peak uses min(requested, peak-derived gain)");
 
-    // Reverb: native setter indices, transforms, exact delay geometry; do not assign p8 a guessed meaning.
+    // Reverb: exact native parameter clamps/transforms and native ring-capacity families.
     ReverbControlModel reverb(48000);
     reverb.setNativeParameter(0,1.0);
     check(near(reverb.parameters().size,1.0) && reverb.lastNativeUpdateFlag()==2,
           "Reverb Size maps UI 1 to native 1 and requests native update flag 2");
-    const double delays[8]={960,2880,1440,4272,7200,5760,6720,5280};
-    bool allDelays=true;
-    for(int i=0;i<8;++i) allDelays &= near(reverb.parameters().delaySamples[static_cast<std::size_t>(i)],delays[i]);
-    check(allDelays,"Reverb all eight delay families equal Fs*seconds*Size without guessed rounding");
+    const auto lengths48=reverb.nativeBufferLengthsSamples();
+    check(lengths48==std::array<int,4>{610,4272,7200,9600},
+          "Reverb allocator capacities at 48 kHz round the four native time families with FCVTAS");
+    check(ReverbControlModel::kNativeBufferFamilies[0].count==4 &&
+          ReverbControlModel::kNativeBufferFamilies[1].count==6 &&
+          ReverbControlModel::kNativeBufferFamilies[2].count==4 &&
+          ReverbControlModel::kNativeBufferFamilies[3].count==1,
+          "Reverb native allocator has 4 short, 6 medium, 4 long and 1 predelay ring buffers");
     reverb.setSampleRate(44100);
-    check(near(reverb.parameters().delaySamples[3],44100.0*0.089),
-          "Reverb sample counts preserve fractional Fs scaling instead of assuming integer rounding");
+    check(reverb.nativeBufferLengthsSamples()==std::array<int,4>{560,3925,6615,8820},
+          "Reverb allocator capacities at 44.1 kHz use native float32 multiply and nearest rounding");
     reverb.setSampleRate(48000);
     reverb.setNativeParameter(0,0.0);
     check(near(reverb.parameters().size,0.01),"Reverb Size transform maps UI zero to 0.01");
-    reverb.setNativeParameter(1,0.25);
-    reverb.setNativeParameter(2,0.35);
+    reverb.setNativeParameter(1,1.25);
+    reverb.setNativeParameter(2,-0.35);
     reverb.setNativeParameter(3,0.45);
     check(reverb.lastNativeUpdateFlag()==2,"Reverb Pre-delay requests native update flag 2");
-    reverb.setNativeParameter(4,0.55);
+    reverb.setNativeParameter(4,-0.55);
     reverb.setNativeParameter(5,0.65);
-    check(near(reverb.parameters().filter,0.25) && near(reverb.parameters().fade,0.35) &&
-          near(reverb.parameters().preDelay,0.45) && near(reverb.parameters().mix,0.55) &&
+    check(near(reverb.parameters().filter,1.0) && near(reverb.parameters().fade,0.0) &&
+          near(reverb.parameters().preDelay,0.45) && near(reverb.parameters().mix,0.0) &&
           near(reverb.parameters().preDelayMix,0.65) && reverb.lastNativeUpdateFlag()==1,
-          "Reverb indices 1,2,4,5 preserve identity values and request native update flag 1");
+          "Reverb native parameter setter clamps each UI value to [0,1] before identity mapping");
     reverb.setNativeParameter(6,0.25);
     check(near(reverb.parameters().damp,0.75) && reverb.lastNativeUpdateFlag()==1,
           "Reverb Damp transform equals 1-UI and requests native update flag 1");
+    reverb.setNativeParameter(1,std::numeric_limits<double>::quiet_NaN());
+    check(near(reverb.parameters().filter,1.0),
+          "Reverb FMINNM/FMAXNM parameter clamp selects the numeric endpoint for NaN");
     const auto beforeIndex7=reverb.parameters();
     reverb.setNativeParameter(7,1.0);
     check(near(reverb.parameters().preDelayMix,beforeIndex7.preDelayMix) &&
           near(reverb.parameters().size,beforeIndex7.size) &&
           near(reverb.parameters().damp,beforeIndex7.damp) &&
           reverb.lastNativeUpdateFlag()==1,
-          "Reverb index 7 leaves parameter fields unchanged and writes native update flag 1");
+          "Reverb eighth native parameter slot is a flag-only operation with no p8 field");
     check(ReverbControlModel::kRecoveredConstants[0]==0.75 &&
+          ReverbControlModel::kRecoveredConstants[1]==0.75 &&
           ReverbControlModel::kRecoveredConstants[2]==0.625 &&
-          ReverbControlModel::kRecoveredConstants[4]==0.25,
-          "Reverb six recovered feedback/combining constants retained");
+          ReverbControlModel::kRecoveredConstants[3]==0.625 &&
+          ReverbControlModel::kRecoveredConstants[4]==0.25 &&
+          ReverbControlModel::kRecoveredConstants[5]==0.25,
+          "Reverb four all-pass and two late-network feedback constants retained");
 
     // Remaining exact numeric settings and values from the supplied reference.
     check(near(clampRecoveredTempo(0.1),0.5) && near(clampRecoveredTempo(4.0),3.0),"Tempo range is 0.5x–3.0x");
