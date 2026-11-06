@@ -57,8 +57,8 @@ int main() {
           "Balance +0.25 attenuates left by 12 dB and leaves right at unity");
     float positiveBalance[] = {1.0f,1.0f};
     balance.process(positiveBalance,1);
-    check(near(positiveBalance[0],std::pow(10.0,-12.0/20.0)) && near(positiveBalance[1],1.0),
-          "Balance positive sign routes attenuation to the left channel");
+    check(near(positiveBalance[0],std::pow(10.0,-12.0/20.0),1e-7) && near(positiveBalance[1],1.0),
+          "Balance positive sign routes attenuation to the left channel (Float32 tolerance)");
     balance.configure(true,-1.0);
     float negativeBalance[] = {1.0f,1.0f};
     balance.process(negativeBalance,1);
