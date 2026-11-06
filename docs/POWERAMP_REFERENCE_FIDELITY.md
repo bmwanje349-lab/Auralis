@@ -4,13 +4,20 @@ This document is the implementation contract for the supplied research record. I
 
 ## Implemented and covered by native tests
 
-### StereoWide — exact recovered behavior
+### StereoWide — native Float32 arithmetic and DSPI integration
 
-- Mid/Side definitions: `M=(L+R)/2`, `S=(L-R)/2`.
-- Output: `L'=M+gS`, `R'=M-gS`.
-- Direct UI mapping: `g=1+2*(sliderPercent/100)`.
-- Tested points: 0%→1.0, 25%→1.5, 50%→2.0, 75%→2.5, 100%→3.0.
-- Tested 100% result: `L'=2L-R`, `R'=2R-L`; mono remains unchanged.
+- Native descriptor/configuration region: `0x220380`; Float32 callback: `0x21CBC0`; Float64 callback: `0x21EBA0`; parameter handler: `0x21FFB8`; built-in DSPI plug-in index: 2.
+- The parameter handler clamps the normalized Float32 control to `[0,1]`, computes `g = fma(2,p,1)` in Float32, stores that Float32 gain at context `+0xC0`, and sets/clears enable flag bit `0x04` in context `+0x6C`. The width gain is written directly; the recovered handler does not apply a separate width ramp.
+- User-facing percentage mapping: `p = clamp(Float32(sliderPercent)/100, 0, 1)`; `g = fma(Float32(2), p, Float32(1))`. Thus 0%→1.0, 25%→1.5, 50%→2.0, 75%→2.5, and 100%→3.0.
+- Per frame, the native callback computes `M=(L+R)*0.5`, then independently computes `S_L=L-M` and `S_R=R-M`, and writes `L'=fma(S_L,g,M)`, `R'=fma(S_R,g,M)`. This is algebraically equivalent to the usual Mid/Side equations but preserves the native operation order and fused Float32 rounding. The Float64 callback uses the same Float32 context gain converted to double for its wider sample path.
+- At 100%, the result is `L'=2L-R`, `R'=2R-L`; a dual-mono input has zero side and is unchanged. Auralis now matches the Float32 gain storage, midpoint/side operation grouping, FMA output, and shared gain used by its Float32/Float64 entry points.
+- Auralis tests verify all five slider points, a non-binary slider value, Float32 and Float64 arithmetic against the corresponding native operation order, NaN/infinity clamping, bypass, and mono invariance.
+
+### Built-in DSPI order and separate Reverb plug-in
+
+The native `0x21CBC0` callback first invokes its registered DSP plug-in callback list, then runs its built-in DSPI stages. The recovered DSPI order is **StereoWide → Mono → Balance → Limiter**: StereoWide uses context flag bit `0x04` and gain `+0xC0`; Mono follows under flag bit `0x08`; Balance follows under its channel attenuation flags; the limiter branches follow Balance. Auralis already uses this same relative order in `AuralisDsp::process()` and now has integration tests proving that Mono/Balance see the widened samples and that the limiter detects the post-widener peak.
+
+Poweramp's built-in plug-in registry lists `com.maxmpz.audioplayer/plugin.reverb` as a separate hidden `PA_PLUGIN_TYPE_INTERNAL_DSP`, while `com.maxmpz.audioplayer/plugin.dspi` is the internal DSPI processor. Reverb is therefore not part of the StereoWide algorithm; it is a separate upstream DSP plug-in callback. The generic callback dispatch precedes the built-in DSPI operations in the recovered callback. Auralis's current Reverb code is still a parameter/reference model, not an audible Reverb processor, so this widener change does not claim that Auralis now renders Poweramp's Reverb.
 
 ### Parametric EQ — recovered six biquad equations
 
@@ -82,7 +89,7 @@ These values are retained as reference data and tested where an equation or nume
 
 ## Processing and threading
 
-The Android player uses separate decoder, DSP and output worker threads. The native DSP pipeline uses preallocated fixed-size stereo buffers and lock-free SPSC queues. Settings cross to the DSP worker through a bounded control queue; the DSP worker does not take a UI mutex. The recovered shared DSPI relative order is master-gain ramp, StereoWide, Mono fold-down, Balance, then Limiter. Auralis places its EQ stage before those effects and applies the ReplayGain/EQ-preamp/master gain before EQ; it does not claim the whole original Poweramp pipeline because the remaining proprietary modules and all global insertion points have not been recovered. Android `MediaCodec` and `AudioTrack` remain platform I/O components, not copies of Poweramp decoders or output backends.
+The Android player uses separate decoder, DSP and output worker threads. The native DSP pipeline uses preallocated fixed-size stereo buffers and lock-free SPSC queues. Settings cross to the DSP worker through a bounded control queue; the DSP worker does not take a UI mutex. The recovered built-in DSPI relative order is StereoWide, Mono fold-down, Balance, then Limiter; the separate DSP plug-in callback list is dispatched before those internal DSPI operations. Auralis applies ReplayGain/EQ-preamp/master gain before EQ, then StereoWide, Mono, Balance and Limiter. The proprietary Reverb remains a separate upstream DSP plug-in in Poweramp and is not combined with StereoWide. Auralis does not claim the whole original Poweramp pipeline because its audible Reverb kernel, remaining proprietary modules and all output-backend-specific insertion points have not been reproduced. Android `MediaCodec` and `AudioTrack` remain platform I/O components, not copies of Poweramp decoders or output backends.
 
 ## Deliberate non-claims
 

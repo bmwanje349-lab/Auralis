@@ -24,6 +24,11 @@ bool same(const BiquadCoefficients& a, const BiquadCoefficients& b, double eps=1
 BiquadCoefficients normalized(double b0,double b1,double b2,double a0,double a1,double a2) {
     return {b0/a0,b1/a0,b2/a0,a1/a0,a2/a0};
 }
+void powerampStereoWideFloatReference(float& left, float& right, float gain) {
+    const float mid = (left + right) * 0.5f;
+    left = std::fma(left - mid, gain, mid);
+    right = std::fma(right - mid, gain, mid);
+}
 }
 
 int main() {
@@ -33,15 +38,53 @@ int main() {
     const double expectedGain[] = {1.0,1.5,2.0,2.5,3.0};
     for (int i=0;i<5;++i) {
         wide.configure(true,slider[i]);
-        check(near(wide.sideGain(),expectedGain[i]),"StereoWide slider mapping "+std::to_string(static_cast<int>(slider[i]))+"%");
+        const float p = static_cast<float>(slider[i]) / 100.0f;
+        const float nativeGain = std::fma(2.0f,p,1.0f);
+        check(wide.sideGain()==static_cast<double>(nativeGain) &&
+              near(wide.sideGain(),expectedGain[i]),
+              "StereoWide Float32 FMA slider mapping "+std::to_string(static_cast<int>(slider[i]))+"%");
     }
+    wide.configure(true,37.0);
+    const float gain37 = std::fma(2.0f,37.0f/100.0f,1.0f);
+    check(wide.sideGain()==static_cast<double>(gain37),
+          "StereoWide retains the native Float32 context gain at non-binary slider values");
+
     wide.configure(true,100.0);
     float f[] = {1.0f,0.0f};
     wide.process(f,1);
     check(near(f[0],2.0) && near(f[1],-1.0),"StereoWide 100% exact L'=2L-R, R'=2R-L");
+    float nativeFloat[] = {0.73123455f,-0.21765433f};
+    float expectedLeft = nativeFloat[0], expectedRight = nativeFloat[1];
+    powerampStereoWideFloatReference(expectedLeft,expectedRight,3.0f);
+    wide.process(nativeFloat,1);
+    check(nativeFloat[0]==expectedLeft && nativeFloat[1]==expectedRight,
+          "StereoWide Float32 path matches Poweramp midpoint, per-channel side and FMLA rounding");
+
     double d[] = {0.75,-0.25};
     wide.process(d,1);
-    check(near(d[0],1.75) && near(d[1],-1.25),"StereoWide double callback same transform");
+    check(near(d[0],1.75) && near(d[1],-1.25),"StereoWide double callback uses the same Float32 context gain");
+    wide.configure(true,37.0);
+    const double gain37Double = static_cast<double>(gain37);
+    double nativeDouble[] = {0.712345678901,-0.198765432109};
+    const double midDouble = (nativeDouble[0]+nativeDouble[1])*0.5;
+    const double expectedDoubleLeft = std::fma(nativeDouble[0]-midDouble,gain37Double,midDouble);
+    const double expectedDoubleRight = std::fma(nativeDouble[1]-midDouble,gain37Double,midDouble);
+    wide.process(nativeDouble,1);
+    check(nativeDouble[0]==expectedDoubleLeft && nativeDouble[1]==expectedDoubleRight,
+          "StereoWide double path uses the Float32 native gain converted to double and fused output");
+
+    wide.configure(true,-25.0);
+    check(wide.sideGain()==1.0,"StereoWide finite values below the slider range clamp to zero width");
+    wide.configure(true,125.0);
+    check(wide.sideGain()==3.0,"StereoWide finite values above the slider range clamp to maximum width");
+    wide.configure(true,std::numeric_limits<double>::quiet_NaN());
+    check(wide.sideGain()==1.0,"StereoWide native parameter NaN clamps to zero width");
+    wide.configure(true,-std::numeric_limits<double>::infinity());
+    check(wide.sideGain()==1.0,"StereoWide negative infinity clamps to zero width");
+    wide.configure(true,std::numeric_limits<double>::infinity());
+    check(wide.sideGain()==3.0,"StereoWide positive infinity clamps to maximum width");
+
+    wide.configure(true,100.0);
     float mono[] = {0.25f,0.25f};
     wide.process(mono,1);
     check(near(mono[0],0.25) && near(mono[1],0.25),"StereoWide mono side is zero and remains unchanged");
@@ -281,6 +324,38 @@ int main() {
     float rendered[2]{};
     check(pipeline.dequeueOutput(rendered,1)==1 && near(rendered[0],2.0) && near(rendered[1],-1.0),
           "Pipeline output matches recovered StereoWide transform");
+
+    // Poweramp's internal DSPI callback order is StereoWide -> Mono -> Balance -> Limiter.
+    AudioPipeline spatialOrderPipeline(48000);
+    spatialOrderPipeline.setStereoWide(true,100.0);
+    spatialOrderPipeline.setMono(true);
+    spatialOrderPipeline.setBalance(true,1.0);
+    spatialOrderPipeline.setLimiter(false,LimiterPath::HardCeiling);
+    float spatialOrderInput[]={1.0f,0.0f};
+    check(spatialOrderPipeline.enqueueInput(spatialOrderInput,1) &&
+          spatialOrderPipeline.processOne()==1,
+          "Spatial chain accepts a block with StereoWide, Mono and Balance enabled");
+    float spatialOrderOutput[2]{};
+    check(spatialOrderPipeline.dequeueOutput(spatialOrderOutput,1)==1 &&
+          near(spatialOrderOutput[0],0.5*std::pow(10.0,-48.0/20.0),1e-8) &&
+          near(spatialOrderOutput[1],0.5,1e-7),
+          "Spatial chain applies StereoWide before Mono fold-down and Balance attenuation");
+
+    AudioPipeline widenedLimiterPipeline(48000);
+    widenedLimiterPipeline.setStereoWide(true,100.0);
+    widenedLimiterPipeline.setMono(false);
+    widenedLimiterPipeline.setBalance(false,0.0);
+    widenedLimiterPipeline.setLimiter(true,LimiterPath::HardCeiling);
+    float widenedPeakInput[]={1.0f,0.0f};
+    check(widenedLimiterPipeline.enqueueInput(widenedPeakInput,1) &&
+          widenedLimiterPipeline.processOne()==1,
+          "Widened signal reaches the downstream native limiter stage");
+    float widenedPeakOutput[2]{};
+    const float firstLimiterGain=1.0f-1.0f/256.0f;
+    check(widenedLimiterPipeline.dequeueOutput(widenedPeakOutput,1)==1 &&
+          near(widenedPeakOutput[0],2.0*firstLimiterGain,1e-7) &&
+          near(widenedPeakOutput[1],-firstLimiterGain,1e-7),
+          "Limiter detects and links the post-StereoWide left/right peak");
 
     AudioPipeline controlPipeline(48000);
     controlPipeline.setBalance(true,1.0);

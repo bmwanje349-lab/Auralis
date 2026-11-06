@@ -179,30 +179,41 @@ void Limiter::process(float* x, std::size_t frames) noexcept {
 
 void StereoWide::configure(bool enabled, double sliderPercent) noexcept {
     enabled_ = enabled;
-    const double p = clampd(sliderPercent, 0.0, 100.0) / 100.0;
-    sideGain_ = 1.0 + 2.0 * p;
+
+    // The native parameter handler receives a normalized Float32 slider value,
+    // clamps it to [0,1], then computes g = fma(p, 2, 1) in Float32 and stores
+    // that Float32 result at context +0xC0. Reproduce those rounding points.
+    const float percent = static_cast<float>(sliderPercent);
+    const float normalized = std::isnan(percent)
+        ? 0.0f
+        : std::max(0.0f, std::min(percent / 100.0f, 1.0f));
+    sideGain_ = std::fma(2.0f, normalized, 1.0f);
 }
 void StereoWide::process(float* x, std::size_t frames) const noexcept {
-    if (!enabled_ || x == nullptr || sideGain_ == 1.0) return;
-    const double g = sideGain_;
+    if (!enabled_ || x == nullptr || sideGain_ == 1.0f) return;
+    const float g = sideGain_;
     for (std::size_t i = 0; i < frames; ++i) {
         const float l = x[2 * i], r = x[2 * i + 1];
-        const float gf = static_cast<float>(g);
+
+        // Poweramp computes the common-mode sample first, derives each side
+        // independently as channel - mid, and uses fused multiply-add for output.
+        // This is algebraically equivalent to (L-R)/2 but matches native Float32
+        // rounding and FMLA behavior more closely.
         const float mid = (l + r) * 0.5f;
-        const float side = (l - r) * 0.5f;
-        x[2 * i] = mid + gf * side;
-        x[2 * i + 1] = mid - gf * side;
+        x[2 * i] = std::fma(l - mid, g, mid);
+        x[2 * i + 1] = std::fma(r - mid, g, mid);
     }
 }
 void StereoWide::process(double* x, std::size_t frames) const noexcept {
-    if (!enabled_ || x == nullptr || sideGain_ == 1.0) return;
-    const double g = sideGain_;
+    if (!enabled_ || x == nullptr || sideGain_ == 1.0f) return;
+    // Poweramp's double callback converts its Float32 context gain to double;
+    // it does not derive a separate higher-precision slider coefficient.
+    const double g = static_cast<double>(sideGain_);
     for (std::size_t i = 0; i < frames; ++i) {
         const double l = x[2 * i], r = x[2 * i + 1];
         const double mid = (l + r) * 0.5;
-        const double side = (l - r) * 0.5;
-        x[2 * i] = mid + g * side;
-        x[2 * i + 1] = mid - g * side;
+        x[2 * i] = std::fma(l - mid, g, mid);
+        x[2 * i + 1] = std::fma(r - mid, g, mid);
     }
 }
 
@@ -310,6 +321,8 @@ void AuralisDsp::process(float* x, std::size_t frames) noexcept {
             if (band.channel != 1) x[2 * i + 1] = static_cast<float>(band.right.process(x[2 * i + 1], band.coefficients));
         }
     }
+    // Match Poweramp's built-in DSPI order. Its Reverb is a separate upstream
+    // DSP plug-in callback and is intentionally not folded into StereoWide here.
     stereoWide_.process(x, frames);
     mono_.process(x, frames);
     balance_.process(x, frames);

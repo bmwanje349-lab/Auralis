@@ -104,10 +104,12 @@ public:
     void configure(bool enabled, double sliderPercent) noexcept;
     void process(float* interleavedStereo, std::size_t frames) const noexcept;
     void process(double* interleavedStereo, std::size_t frames) const noexcept;
-    double sideGain() const noexcept { return sideGain_; }
+    // Poweramp stores the normalized width gain in its native Float32 context.
+    // Return double for the public diagnostic API without changing that storage precision.
+    double sideGain() const noexcept { return static_cast<double>(sideGain_); }
 private:
     bool enabled_ = false;
-    double sideGain_ = 1.0;
+    float sideGain_ = 1.0f;
 };
 
 // Native DSPI Balance: positive values attenuate left, negative values attenuate right.
