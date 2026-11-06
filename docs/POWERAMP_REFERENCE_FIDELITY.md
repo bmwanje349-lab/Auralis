@@ -53,7 +53,7 @@ The player currently delegates decoding to Android's media stack; it does not ye
 
 ### Reverb parameter model and delay geometry
 
-Auralis's Reverb control model now follows the native setter's parameter contract: inputs are clamped to `[0,1]`; Size maps as `0.01+0.99*UI`; Damp maps as `1-UI`; Filter, Fade, Pre-delay, Mix and Pre-delay-Mix are identity values. The eighth service slot is not a user parameter: the Java service sends eight slots, but native setter index 7 only writes update flag 1 and does not store a p8 field.
+Auralis's Reverb control model now follows the native setter's parameter contract: inputs are clamped to `[0,1]` using Float32 arithmetic; Size maps as `0.01+0.99*UI` (so the default UI value 0 initializes internal Size to `0.01`); Damp maps as `1-UI`; Filter, Fade, Pre-delay, Mix and Pre-delay-Mix are identity values. The eighth service slot is not a user parameter: the Java service sends eight slots, but native setter index 7 only writes update flag 1 and does not store a p8 field.
 
 The native allocator at `0x16BF40` establishes four buffer-capacity families, independent of the Size control: four rings at 12.7 ms, six at 89 ms, four at 150 ms, and one at 200 ms. Lengths use float32 `Fs × seconds` followed by ARM `FCVTAS` rounding (nearest, ties away from zero); backing storage is 64-byte aligned and uses 16-sample-aligned strides. Auralis exposes these recovered buffer lengths in its reference model. They must not be confused with eight Size-scaled echo taps.
 
