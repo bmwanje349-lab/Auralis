@@ -236,29 +236,35 @@ void Mono::process(float* x, std::size_t frames) const noexcept {
 ReverbControlModel::ReverbControlModel(int sampleRate) noexcept { setSampleRate(sampleRate); }
 void ReverbControlModel::setSampleRate(int sampleRate) noexcept {
     sampleRate_ = std::max(1, sampleRate);
-    recalculateDelays();
+}
+std::array<int, 4> ReverbControlModel::nativeBufferLengthsSamples() const noexcept {
+    std::array<int, 4> lengths{};
+    const float rate = static_cast<float>(sampleRate_);
+    for (std::size_t i = 0; i < kNativeBufferFamilies.size(); ++i) {
+        // Poweramp multiplies in float32 and uses FCVTAS (nearest, ties away from zero).
+        const float samples = rate * static_cast<float>(kNativeBufferFamilies[i].seconds);
+        lengths[i] = static_cast<int>(std::lround(static_cast<double>(samples)));
+    }
+    return lengths;
 }
 void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
     if (index == kNativeFlagOperationIndex) {
         nativeUpdateFlag_ = 1;
         return;
     }
+
+    // Native setter uses FMINNM(value, 1) followed by FMAXNM(value, 0).
+    // FMINNM/FMAXNM select the numeric operand when the other is NaN.
+    const double ui = std::isnan(value) ? 1.0 : clampd(value, 0.0, 1.0);
     switch (index) {
-        case 0: params_.size = 0.01 + 0.99 * value; nativeUpdateFlag_ = 2; break;
-        case 1: params_.filter = value; nativeUpdateFlag_ = 1; break;
-        case 2: params_.fade = value; nativeUpdateFlag_ = 1; break;
-        case 3: params_.preDelay = value; nativeUpdateFlag_ = 2; break;
-        case 4: params_.mix = value; nativeUpdateFlag_ = 1; break;
-        case 5: params_.preDelayMix = value; nativeUpdateFlag_ = 1; break;
-        case 6: params_.damp = 1.0 - value; nativeUpdateFlag_ = 1; break;
+        case 0: params_.size = 0.01 + 0.99 * ui; nativeUpdateFlag_ = 2; break;
+        case 1: params_.filter = ui; nativeUpdateFlag_ = 1; break;
+        case 2: params_.fade = ui; nativeUpdateFlag_ = 1; break;
+        case 3: params_.preDelay = ui; nativeUpdateFlag_ = 2; break;
+        case 4: params_.mix = ui; nativeUpdateFlag_ = 1; break;
+        case 5: params_.preDelayMix = ui; nativeUpdateFlag_ = 1; break;
+        case 6: params_.damp = 1.0 - ui; nativeUpdateFlag_ = 1; break;
         default: return;
-    }
-    recalculateDelays();
-}
-void ReverbControlModel::recalculateDelays() noexcept {
-    for (std::size_t i = 0; i < kDelaySeconds.size(); ++i) {
-        const double raw = static_cast<double>(sampleRate_) * kDelaySeconds[i] * params_.size;
-        params_.delaySamples[i] = raw;
     }
 }
 
