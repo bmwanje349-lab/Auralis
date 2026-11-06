@@ -143,25 +143,33 @@ struct ReverbParameters {
     double mix = 0.0;
     double preDelayMix = 0.0;
     double damp = 1.0;
-    // Exact Fs * delaySeconds * Size results. Integer conversion and allocated-buffer
-    // clamping belong to the native reverb implementation and are not specified here.
-    std::array<double, 8> delaySamples{};
+};
+
+struct ReverbBufferFamily {
+    double seconds;
+    int count;
 };
 
 class ReverbControlModel {
 public:
     explicit ReverbControlModel(int sampleRate = 48000) noexcept;
     void setSampleRate(int sampleRate) noexcept;
-    // Native parameter indices 0..6 update the corresponding fields. Indices 0 and 3
-    // request update flag 2; all remaining indices, including flag-only index 7, write 1.
+    // Native setter input is clamped to [0,1]. Indices 0 and 3 write update flag 2;
+    // indices 1,2,4,5,6 write flag 1. Index 7 is a flag-only operation (flag 1).
     static constexpr int kNativeFlagOperationIndex = 7;
     void setNativeParameter(int index, double value) noexcept;
     const ReverbParameters& parameters() const noexcept { return params_; }
     std::uint32_t lastNativeUpdateFlag() const noexcept { return nativeUpdateFlag_; }
-    static constexpr std::array<double, 8> kDelaySeconds = {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110};
+    int sampleRate() const noexcept { return sampleRate_; }
+    std::array<int, 4> nativeBufferLengthsSamples() const noexcept;
+    // Recovered from native allocator 0x16BF40. These are ring capacities, not
+    // independently addressable delay taps or Size-scaled time constants.
+    static constexpr std::array<ReverbBufferFamily, 4> kNativeBufferFamilies{{
+        {0.0127, 4}, {0.089, 6}, {0.150, 4}, {0.200, 1}
+    }};
+    // Four initial all-pass feedback gains, followed by two late-network gains.
     static constexpr std::array<double, 6> kRecoveredConstants = {0.75, 0.75, 0.625, 0.625, 0.25, 0.25};
 private:
-    void recalculateDelays() noexcept;
     int sampleRate_ = 48000;
     ReverbParameters params_{};
     std::uint32_t nativeUpdateFlag_ = 0;
