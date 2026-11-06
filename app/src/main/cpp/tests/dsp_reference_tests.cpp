@@ -205,9 +205,9 @@ int main() {
     reverb.setNativeParameter(4,-0.55);
     reverb.setNativeParameter(5,0.65);
     check(near(reverb.parameters().filter,1.0) && near(reverb.parameters().fade,0.0) &&
-          near(reverb.parameters().preDelay,0.45) && near(reverb.parameters().mix,0.0) &&
-          near(reverb.parameters().preDelayMix,0.65) && reverb.lastNativeUpdateFlag()==1,
-          "Reverb native parameter setter clamps each UI value to [0,1] before identity mapping");
+          near(reverb.parameters().preDelay,static_cast<double>(0.45f)) && near(reverb.parameters().mix,0.0) &&
+          near(reverb.parameters().preDelayMix,static_cast<double>(0.65f)) && reverb.lastNativeUpdateFlag()==1,
+          "Reverb native parameter setter clamps each UI value to [0,1] and preserves Float32 values");
     reverb.setNativeParameter(6,0.25);
     check(near(reverb.parameters().damp,0.75) && reverb.lastNativeUpdateFlag()==1,
           "Reverb Damp transform equals 1-UI and requests native update flag 1");
