@@ -16,16 +16,28 @@ This document is the implementation contract for the supplied research record. I
 
 The native engine calculates normalized coefficients for low-pass, high-pass, band-pass, peaking, low-shelf, and high-shelf filters. It uses the supplied definitions for `w`, `alpha`, `A`, and `beta`, the coefficient normalization by `a0`, the 1–24,000 Hz / Q 0.1–12 / ±15 dB limits, and channel codes in the recovered range 0–2. The supplied record confirms left, right and combined operation but does not identify which numeric code selects each. Auralis uses a documented local mapping (0=both, 1=left, 2=right) for its own band model; that mapping is not claimed to be the Poweramp enum mapping. EQ processing state and coefficients use `double` precision. The player UI exposes the two recovered Bass/Treble defaults; the native engine supports 64 band slots.
 
-### Limiter — recovered envelope law only
+### Limiter — linked-peak detector and two protection paths implemented
 
-- Native plugin index: 1.
-- Hard-ceiling path has a recovered ceiling of 1.0.
-- A separate configurable-threshold path and its envelope state are identified.
-- Gain reduction: `G_next = max(G_target, G_current - 1/256)`.
-- Gain recovery: `G_next = min(1, G_current + 1/16384)`.
-- The two paths retain separate envelope-state pairs.
+- Native plugin index: 1; shared DSPI float and double processing callbacks.
+- The hard path compares the linked stereo peak to 1.0; the configurable path compares it to the context ceiling at `+0xF4`.
+- The linked peak is `max(abs(L), abs(R))`; the four-frame native path takes the maximum across both channels in all four frames before changing the envelope.
+- On over-ceiling input the target is `G_target = ceiling / peak`. The target envelope drops immediately to a lower target; the applied gain moves down by the attack increment and is clamped not to undershoot the target.
+- When the peak is below the ceiling, target and applied gain recover toward unity by the release increment.
+- Scalar attack/release increments are 1/256 and 1/16384. The four-frame vector path uses four times those increments per four-frame group.
+- The two native protection modes select different ceilings but share the same applied-gain and envelope state; they are not separate retained limiter instances.
 
-The reference does **not** fully specify the detector that derives `G_target`, or every detail of the configurable threshold. The code therefore implements the exact state-update law as `Limiter::advance(G_target)` but does not guess a peak detector or put an invented limiter in the playback signal path. This is intentionally not advertised as a complete Poweramp-equivalent limiter.
+Native context layout: `+0xEC` applied gain; `+0xF0` target envelope; `+0xF4` configurable ceiling; `+0xF8` scalar release increment; `+0xFC` scalar attack increment; `+0x100` four-frame release increment; `+0x104` four-frame attack increment. Enable flags are in `+0x6C`: hard path bit `0x02`, configurable path bit `0x100`; the capability selector is `+0x128 bit 7`.
+
+The configurable ceiling is recalculated from the accumulated upstream linear gain: when that gain exceeds 0.001 the setter writes its reciprocal to `+0xF4`; otherwise it writes the unbounded sentinel 999.999. Auralis currently derives that gain from the ReplayGain, EQ-preamp and master-gain values represented in its playback graph. The native Poweramp graph also includes no-DVC and per-track gain fields; those two gain sources have not yet been connected to Auralis's player metadata/settings.
+
+### Balance and Mono — native DSPI sample processing
+
+- Balance input is clamped to `[-1,+1]`.
+- Gain law: `G=10^(-48*abs(b)/20)`.
+- Positive balance activates the left-channel attenuation branch; negative balance activates the right-channel branch.
+- Mono uses `M=(L+R)/2` and writes `M` to both output channels.
+- The native DSPI callback applies Mono before Balance; Auralis preserves that relative order.
+- Both controls are connected to the audio path and covered by native unit tests.
 
 ### ReplayGain — recovered preference and gain law
 
@@ -41,17 +53,17 @@ The player currently delegates decoding to Android's media stack; it does not ye
 
 ### Reverb parameter model and delay geometry
 
-The native control model preserves the recovered indices 0–6, size transform `0.01+0.99*UI`, damp transform `1-UI`, identity mappings for the other parameter indices, all eight delay-time families, and all six recovered constants. It records sample counts calculated from `Fs × delaySeconds × transformedSize`. The reference says native code clamps to allocated buffer capacity, but that capacity is not supplied; Auralis does not invent one.
+The native control model preserves indices 0–6, Size transform `0.01+0.99*UI`, Damp transform `1-UI`, identity mapping for Filter/Fade/Pre-delay/Mix/Pre-delay-Mix, all eight delay-time families and all six recovered combining constants. Delay samples remain exact `Fs × delaySeconds × transformedSize` products; the native integer conversion, allocated-buffer capacity and ring-wrap limits are not represented as exact in Auralis.
 
-Index 7 is recorded as a flag operation with no parameter-field write. Its exact bit operation is not supplied, so Auralis intentionally does not toggle an invented boolean or alter p6.
+The native setter's update flag is also recovered: Size (index 0) and Pre-delay (index 3) write flag value 2; Filter, Fade, Mix, Pre-delay Mix and Damp (indices 1,2,4,5,6) write 1; index 7 writes flag value 1 without changing any parameter field. Auralis now records this last native flag operation.
 
-The supplied record does not specify the complete delay-line wiring, per-line read/write recurrence, or exact feedback/combination routing. For that reason this build does not label a guessed reverb network as the recovered Poweramp reverb, and the player does not expose a misleading “Poweramp Reverb” effect switch.
+The callback has three internal processing modes (context mode field `+0xD44` values 1–3), uses eight stereo delay branches, separate vector/scalar/block paths, branch-energy and amplitude calculations, weighted feedback, and smoothed control state. The native source also uses aligned buffers and mode-specific layouts. The entire recursive read/write recurrence, exact delay-index rounding, mode-selection control and all parameter-to-coefficient mappings are not yet reproduced in Auralis, so no “Poweramp Reverb” audio processor is enabled or claimed.
 
 ## Retained recovered settings and constants
 
 The native reference model also retains:
 
-- Balance attenuation magnitude law `10^(-48*abs(b)/20)`; left/right sign routing is intentionally not guessed.
+- Balance law and sign routing are implemented: positive normalized balance attenuates left; negative normalized balance attenuates right. `G=10^(-48*abs(b)/20)`.
 - Tempo's user-facing bounds of 0.5× to 3.0×; no time-stretch kernel is supplied by the reference record.
 - Resampler cutoff bounds 80–99% and default 97, plus the P2D `R={8,16,32,64,128}`, `N={3,4}` families and FAST/BALANCED flags. The exact resampler kernel is not supplied.
 - Dither choices 1–9 by name; their native indices are retained as 1–9. The noise-shaping coefficient sets are not supplied.
@@ -66,7 +78,7 @@ These values are retained as reference data and tested where an equation or nume
 
 ## Processing and threading
 
-The Android player uses separate decoder, DSP, and output worker threads. The native DSP pipeline uses preallocated fixed-size stereo buffers and lock-free SPSC queues. Settings cross to the DSP worker through a bounded control queue; no UI mutex is taken by the DSP worker. Android `MediaCodec` and `AudioTrack` are platform I/O components, not copies of Poweramp's proprietary decoder or output backends. The active Auralis playback graph combines its implemented modules in its own integration order; the supplied Poweramp record does not identify the complete original DSP stage order, so this is not claimed as an exact reproduction of Poweramp's internal routing.
+The Android player uses separate decoder, DSP and output worker threads. The native DSP pipeline uses preallocated fixed-size stereo buffers and lock-free SPSC queues. Settings cross to the DSP worker through a bounded control queue; the DSP worker does not take a UI mutex. The recovered shared DSPI relative order is master-gain ramp, StereoWide, Mono fold-down, Balance, then Limiter. Auralis places its EQ stage before those effects and applies the ReplayGain/EQ-preamp/master gain before EQ; it does not claim the whole original Poweramp pipeline because the remaining proprietary modules and all global insertion points have not been recovered. Android `MediaCodec` and `AudioTrack` remain platform I/O components, not copies of Poweramp decoders or output backends.
 
 ## Deliberate non-claims
 
@@ -124,24 +136,26 @@ Recovered plugin indices: Limiter=1, StereoWide=2, Balance=3. Mono and Balance s
 | `+0x4BC` | Reverb Mix |
 | `+0x4C0` | Reverb p6 / Pre-delay Mix destination |
 | `+0x4C4` | Reverb Size |
-| `+0x6C` | Limiter enable flags |
+| `+0x6C` | DSPI enable flags: hard limiter `0x02`, StereoWide `0x04`, Mono `0x08`, positive Balance direction `0x10`, negative Balance direction `0x20`, configurable limiter `0x100` |
 | `+0x8C + 32*i` | Per-track volume millibels for record i |
 | `+0xC0` | StereoWide width field |
 | `+0xC4` | EQ preamp |
 | `+0xC8` | No-DVC headroom |
 | `+0xCC` | Master-volume millibels |
 | `+0xD8` | Derived linear master gain |
-| `+0xF8 / +0xFC` | Configurable-threshold limiter envelope pair |
-| `+0x100 / +0x104` | Hard-ceiling limiter envelope pair |
+| `+0xEC` | Limiter applied gain |
+| `+0xF0` | Limiter target envelope gain |
+| `+0xF4` | Configurable limiter ceiling; reciprocal accumulated gain or 999.999 sentinel |
+| `+0xF8` | Scalar release increment |
+| `+0xFC` | Scalar attack increment |
+| `+0x100` | Four-frame vector release increment |
+| `+0x104` | Four-frame vector attack increment |
 | `+0x128 bit 7` | Limiter protection-path selection |
 | `+0x134`, `+0x13C` | Additional dynamic gain context fields |
 
 ### Limiter state and timing
 
-The two recovered paths are: hard ceiling 1.0, state pair `+0x100/+0x104); and configurable threshold, state pair `+0xF8/+0xFC`. The scalar state update is:
-`G_next = max(G_target, G_current - 1/256)` for gain reduction, and
-`G_next = min(1, G_current + 1/16384)` for recovery.
-At 48 kHz, the full-range ramp times are approximately 5.333 ms and 341.333 ms. The vector path processes four frames with four-times-larger increments per batch, preserving the aggregate ramp. The complete target detector and configurable-threshold predicates are not specified; Auralis implements the recovered envelope law in isolation and does not invent a peak detector.
+The hard-ceiling path uses a 1.0 detector ceiling; the configurable path uses `+0xF4`. Both share the same `+0xEC` applied gain and `+0xF0` target envelope. The native linked detector measures the maximum absolute sample across L/R; the SIMD path measures eight scalar samples for a four-frame stereo group. On overload, target gain is `ceiling/peak`; the target envelope decreases to that value and the applied gain is pulled toward it by the attack increment. Below ceiling, the envelope and applied gain recover toward 1.0 by the release increment. Scalar attack/release are 1/256 and 1/16384; four-frame vector increments are 4/256 and 4/16384. At 48 kHz, the scalar full-range times are 5.333 ms and 341.333 ms. The branch is therefore implemented as an actual native-linked peak limiter in Auralis, rather than an externally supplied target-only envelope helper.
 
 ### ReplayGain configuration and metadata
 
@@ -164,9 +178,9 @@ Java service: `com.maxmpz.audioplayer.plugin.reverb.ReverbPluginService`; base c
 | 4 | p5 Mix | `+0x4BC`; identity |
 | 5 | p6 Pre-delay Mix | `+0x4C0`; identity |
 | 6 | p7 Damp | `+0x4AC`; `1 - UI_Damp` |
-| 7 | native flag operation | No parameter-field write; exact bit operation unspecified |
+| 7 | native flag operation | No parameter-field write; writes update flag value 1 |
 
-The eight Size-scaled time constants in seconds are {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110}. The six recovered combining constants are {0.75, 0.75, 0.625, 0.625, 0.25, 0.25}. Delay sample counts in Auralis are stored as exact `Fs × seconds × transformedSize` products; integer conversion and allocated-buffer capacity clamping are not guessed. Initialization message type 1 carries configuration, type 2 carries parameters; reset zeros parameters and disables; parameter changes clear selected-preset state; float/double entry points share the recovered float-state core. Full recursive wiring is not in the reference, so no reverb effect is claimed.
+Update flags: indices 0 and 3 write value 2; indices 1,2,4,5,6 and 7 write value 1. The eight Size-scaled time constants in seconds are {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110}. The six recovered combining constants are {0.75, 0.75, 0.625, 0.625, 0.25, 0.25}. Delay sample counts in Auralis remain exact `Fs × seconds × transformedSize` products; integer conversion and allocated-buffer capacity clamping are not guessed. Initialization message type 1 carries configuration, type 2 carries parameters; reset zeros parameters and disables; parameter changes clear selected-preset state; float/double entry points share the recovered float-state core. The three-mode delay-network callback is analyzed, but its complete recursive wiring and delay-index/capacity rules are not yet ported, so no reverb effect is claimed.
 
 ### EQ Java model, JNI and serialization
 

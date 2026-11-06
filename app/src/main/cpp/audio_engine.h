@@ -75,20 +75,28 @@ private:
 class Limiter {
 public:
     void configure(bool enabled, LimiterPath path, double configurableThreshold) noexcept;
+    void setConfigurableThreshold(double threshold) noexcept;
     void reset() noexcept;
-    // Apply the recovered envelope law to an already-derived G_target. The reference
-    // does not fully specify the target detector, so this model does not invent one.
+    // One scalar sample update. targetGain is the detector's ceiling/peak result.
     double advance(double targetGain) noexcept;
-    double gain() const noexcept { return path_ == LimiterPath::HardCeiling ? hardGain_ : thresholdGain_; }
+    // Poweramp's native SIMD branch evaluates four stereo frames together, then
+    // applies one gain to those four frames. The remaining 0–3 frames use scalar steps.
+    void process(float* interleavedStereo, std::size_t frames) noexcept;
+    double gain() const noexcept { return appliedGain_; }
+    double targetGain() const noexcept { return envelopeGain_; }
     double configurableThreshold() const noexcept { return configurableThreshold_; }
     static constexpr double kAttackStep = 1.0 / 256.0;
     static constexpr double kReleaseStep = 1.0 / 16384.0;
+    static constexpr double kVectorAttackStep = 4.0 * kAttackStep;
+    static constexpr double kVectorReleaseStep = 4.0 * kReleaseStep;
+    static constexpr double kUnboundedThreshold = 999.999;
 private:
+    double update(double peak, double ceiling, double attackStep, double releaseStep) noexcept;
     bool enabled_ = false;
     LimiterPath path_ = LimiterPath::HardCeiling;
     double configurableThreshold_ = 1.0;
-    double hardGain_ = 1.0;
-    double thresholdGain_ = 1.0;
+    double appliedGain_ = 1.0;
+    double envelopeGain_ = 1.0;
 };
 
 class StereoWide {
@@ -100,6 +108,31 @@ public:
 private:
     bool enabled_ = false;
     double sideGain_ = 1.0;
+};
+
+// Native DSPI Balance: positive values attenuate left, negative values attenuate right.
+class Balance {
+public:
+    void configure(bool enabled, double normalized) noexcept;
+    void process(float* interleavedStereo, std::size_t frames) const noexcept;
+    double normalized() const noexcept { return balance_; }
+    double leftGain() const noexcept { return leftGain_; }
+    double rightGain() const noexcept { return rightGain_; }
+private:
+    bool enabled_ = false;
+    double balance_ = 0.0;
+    double leftGain_ = 1.0;
+    double rightGain_ = 1.0;
+};
+
+// Native DSPI Mono uses (L+R)/2 for both output channels.
+class Mono {
+public:
+    void configure(bool enabled) noexcept { enabled_ = enabled; }
+    void process(float* interleavedStereo, std::size_t frames) const noexcept;
+    bool enabled() const noexcept { return enabled_; }
+private:
+    bool enabled_ = false;
 };
 
 struct ReverbParameters {
@@ -119,23 +152,28 @@ class ReverbControlModel {
 public:
     explicit ReverbControlModel(int sampleRate = 48000) noexcept;
     void setSampleRate(int sampleRate) noexcept;
-    // Indices 0..6 map to recovered parameters. Index 7 is a flag operation whose bit
-    // semantics are not supplied; it does not write a parameter field in this model.
+    // Native parameter indices 0..6 update the corresponding fields. Indices 0 and 3
+    // request update flag 2; all remaining indices, including flag-only index 7, write 1.
     static constexpr int kNativeFlagOperationIndex = 7;
     void setNativeParameter(int index, double value) noexcept;
     const ReverbParameters& parameters() const noexcept { return params_; }
+    std::uint32_t lastNativeUpdateFlag() const noexcept { return nativeUpdateFlag_; }
     static constexpr std::array<double, 8> kDelaySeconds = {0.020, 0.060, 0.030, 0.089, 0.150, 0.120, 0.140, 0.110};
     static constexpr std::array<double, 6> kRecoveredConstants = {0.75, 0.75, 0.625, 0.625, 0.25, 0.25};
 private:
     void recalculateDelays() noexcept;
     int sampleRate_ = 48000;
     ReverbParameters params_{};
+    std::uint32_t nativeUpdateFlag_ = 0;
 };
 
 class AuralisDsp {
 public:
     explicit AuralisDsp(int sampleRate);
     void setStereoWide(bool enabled, double sliderPercent) noexcept;
+    void setBalance(bool enabled, double normalized) noexcept;
+    void setMono(bool enabled) noexcept;
+    void setLimiter(bool enabled, LimiterPath path) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
                    double gainDb, int channel) noexcept;
     void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
@@ -144,11 +182,17 @@ public:
     void setMasterGainDb(double db) noexcept;
     void process(float* interleavedStereo, std::size_t frames) noexcept;
     double stereoSideGain() const noexcept { return stereoWide_.sideGain(); }
+    double balanceLeftGain() const noexcept { return balance_.leftGain(); }
+    double balanceRightGain() const noexcept { return balance_.rightGain(); }
+    double limiterGain() const noexcept { return limiter_.gain(); }
     const ReverbControlModel& reverbModel() const noexcept { return reverb_; }
 private:
     int sampleRate_;
     std::array<EqBand, kMaxEqBands> bands_{};
     StereoWide stereoWide_{};
+    Balance balance_{};
+    Mono mono_{};
+    Limiter limiter_{};
     ReplayGain replayGain_{};
     ReplayGainMetadata replayGainMetadata_{};
     ReverbControlModel reverb_;
@@ -185,6 +229,9 @@ public:
     bool inputEmpty() const noexcept { return input_.empty(); }
     // UI/configuration thread publishes commands; the DSP thread applies them between blocks.
     void setStereoWide(bool enabled, double percent) noexcept;
+    void setBalance(bool enabled, double normalized) noexcept;
+    void setMono(bool enabled) noexcept;
+    void setLimiter(bool enabled, LimiterPath path) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
 private:
     struct ControlCommand { int kind=0, i0=0, i1=0, i2=0, i3=0; double d0=0.0, d1=0.0; bool b0=false; };

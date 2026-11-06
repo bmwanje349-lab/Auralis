@@ -111,15 +111,70 @@ double ReplayGain::linearGain(const ReplayGainMetadata& m) const noexcept {
 void Limiter::configure(bool enabled, LimiterPath path, double configurableThreshold) noexcept {
     enabled_ = enabled;
     path_ = path;
-    configurableThreshold_ = configurableThreshold;
+    setConfigurableThreshold(configurableThreshold);
 }
-void Limiter::reset() noexcept { hardGain_ = 1.0; thresholdGain_ = 1.0; }
+void Limiter::setConfigurableThreshold(double threshold) noexcept {
+    configurableThreshold_ = (std::isfinite(threshold) && threshold > 0.0)
+        ? threshold : kUnboundedThreshold;
+}
+void Limiter::reset() noexcept {
+    appliedGain_ = 1.0;
+    envelopeGain_ = 1.0;
+}
+double Limiter::update(double peak, double ceiling, double attackStep, double releaseStep) noexcept {
+    if (peak > ceiling && peak > 0.0) {
+        const double target = ceiling / peak;
+        if (target < envelopeGain_) envelopeGain_ = target;
+    } else {
+        envelopeGain_ = std::min(1.0, envelopeGain_ + releaseStep);
+    }
+    if (envelopeGain_ < appliedGain_) {
+        appliedGain_ = std::max(envelopeGain_, appliedGain_ - attackStep);
+    } else if (envelopeGain_ > appliedGain_) {
+        appliedGain_ = std::min(envelopeGain_, appliedGain_ + releaseStep);
+    }
+    return appliedGain_;
+}
 double Limiter::advance(double targetGain) noexcept {
-    double& current = path_ == LimiterPath::HardCeiling ? hardGain_ : thresholdGain_;
-    if (!enabled_) return current;
-    if (targetGain < current) current = std::max(targetGain, current - kAttackStep);
-    else current = std::min(1.0, current + kReleaseStep);
-    return current;
+    if (!enabled_) return appliedGain_;
+    if (std::isfinite(targetGain) && targetGain < 1.0) {
+        const double target = clampd(targetGain, 0.0, 1.0);
+        if (target < envelopeGain_) envelopeGain_ = target;
+    } else {
+        envelopeGain_ = std::min(1.0, envelopeGain_ + kReleaseStep);
+    }
+    if (envelopeGain_ < appliedGain_) {
+        appliedGain_ = std::max(envelopeGain_, appliedGain_ - kAttackStep);
+    } else if (envelopeGain_ > appliedGain_) {
+        appliedGain_ = std::min(envelopeGain_, appliedGain_ + kReleaseStep);
+    }
+    return appliedGain_;
+}
+void Limiter::process(float* x, std::size_t frames) noexcept {
+    if (!enabled_ || x == nullptr || frames == 0) return;
+    const double ceiling = path_ == LimiterPath::HardCeiling ? 1.0 : configurableThreshold_;
+    std::size_t frame = 0;
+    // Native SIMD path: one linked peak over four stereo frames, then one envelope
+    // update and one gain value for the eight interleaved samples in that group.
+    for (; frame + 4 <= frames; frame += 4) {
+        double peak = 0.0;
+        for (std::size_t j = 0; j < 4; ++j) {
+            peak = std::max(peak, std::abs(static_cast<double>(x[2 * (frame + j)])));
+            peak = std::max(peak, std::abs(static_cast<double>(x[2 * (frame + j) + 1])));
+        }
+        const double gain = update(peak, ceiling, kVectorAttackStep, kVectorReleaseStep);
+        const float g = static_cast<float>(gain);
+        for (std::size_t j = 0; j < 8; ++j) x[2 * frame + j] *= g;
+    }
+    // Native scalar tail: update the linked detector and envelope once per stereo frame.
+    for (; frame < frames; ++frame) {
+        const double peak = std::max(
+            std::abs(static_cast<double>(x[2 * frame])),
+            std::abs(static_cast<double>(x[2 * frame + 1])));
+        const float gain = static_cast<float>(update(peak, ceiling, kAttackStep, kReleaseStep));
+        x[2 * frame] *= gain;
+        x[2 * frame + 1] *= gain;
+    }
 }
 
 void StereoWide::configure(bool enabled, double sliderPercent) noexcept {
@@ -151,21 +206,51 @@ void StereoWide::process(double* x, std::size_t frames) const noexcept {
     }
 }
 
+void Balance::configure(bool enabled, double normalized) noexcept {
+    enabled_ = enabled;
+    balance_ = clampd(normalized, -1.0, 1.0);
+    leftGain_ = 1.0;
+    rightGain_ = 1.0;
+    const double attenuation = recoveredBalanceAttenuation(balance_);
+    if (balance_ > 0.0) leftGain_ = attenuation;
+    else if (balance_ < 0.0) rightGain_ = attenuation;
+}
+void Balance::process(float* x, std::size_t frames) const noexcept {
+    if (!enabled_ || x == nullptr || balance_ == 0.0) return;
+    const float left = static_cast<float>(leftGain_);
+    const float right = static_cast<float>(rightGain_);
+    for (std::size_t i = 0; i < frames; ++i) {
+        x[2 * i] *= left;
+        x[2 * i + 1] *= right;
+    }
+}
+void Mono::process(float* x, std::size_t frames) const noexcept {
+    if (!enabled_ || x == nullptr) return;
+    for (std::size_t i = 0; i < frames; ++i) {
+        const float mid = (x[2 * i] + x[2 * i + 1]) * 0.5f;
+        x[2 * i] = mid;
+        x[2 * i + 1] = mid;
+    }
+}
+
 ReverbControlModel::ReverbControlModel(int sampleRate) noexcept { setSampleRate(sampleRate); }
 void ReverbControlModel::setSampleRate(int sampleRate) noexcept {
     sampleRate_ = std::max(1, sampleRate);
     recalculateDelays();
 }
 void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
-    if (index == kNativeFlagOperationIndex) return;
+    if (index == kNativeFlagOperationIndex) {
+        nativeUpdateFlag_ = 1;
+        return;
+    }
     switch (index) {
-        case 0: params_.size = 0.01 + 0.99 * value; break;
-        case 1: params_.filter = value; break;
-        case 2: params_.fade = value; break;
-        case 3: params_.preDelay = value; break;
-        case 4: params_.mix = value; break;
-        case 5: params_.preDelayMix = value; break;
-        case 6: params_.damp = 1.0 - value; break;
+        case 0: params_.size = 0.01 + 0.99 * value; nativeUpdateFlag_ = 2; break;
+        case 1: params_.filter = value; nativeUpdateFlag_ = 1; break;
+        case 2: params_.fade = value; nativeUpdateFlag_ = 1; break;
+        case 3: params_.preDelay = value; nativeUpdateFlag_ = 2; break;
+        case 4: params_.mix = value; nativeUpdateFlag_ = 1; break;
+        case 5: params_.preDelayMix = value; nativeUpdateFlag_ = 1; break;
+        case 6: params_.damp = 1.0 - value; nativeUpdateFlag_ = 1; break;
         default: return;
     }
     recalculateDelays();
@@ -179,6 +264,11 @@ void ReverbControlModel::recalculateDelays() noexcept {
 
 AuralisDsp::AuralisDsp(int sampleRate) : sampleRate_(std::max(1, sampleRate)), reverb_(sampleRate_) {}
 void AuralisDsp::setStereoWide(bool enabled, double percent) noexcept { stereoWide_.configure(enabled, percent); }
+void AuralisDsp::setBalance(bool enabled, double normalized) noexcept { balance_.configure(enabled, normalized); }
+void AuralisDsp::setMono(bool enabled) noexcept { mono_.configure(enabled); }
+void AuralisDsp::setLimiter(bool enabled, LimiterPath path) noexcept {
+    limiter_.configure(enabled, path, Limiter::kUnboundedThreshold);
+}
 bool AuralisDsp::setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
                            double gainDb, int channel) noexcept {
     if (index < 0 || index >= kMaxEqBands || type < 0 || type > 5 || channel < 0 || channel > 2) return false;
@@ -214,6 +304,16 @@ void AuralisDsp::process(float* x, std::size_t frames) noexcept {
         }
     }
     stereoWide_.process(x, frames);
+    mono_.process(x, frames);
+    balance_.process(x, frames);
+    // Poweramp's configurable limiter ceiling is the inverse of accumulated linear
+    // gain when that gain exceeds 0.001; otherwise the native context uses 999.999.
+    if (preGain > 0.001 && std::isfinite(preGain)) {
+        limiter_.setConfigurableThreshold(1.0 / preGain);
+    } else {
+        limiter_.setConfigurableThreshold(Limiter::kUnboundedThreshold);
+    }
+    limiter_.process(x, frames);
 }
 
 AudioRing::AudioRing() = default;
@@ -263,6 +363,15 @@ bool AudioPipeline::publish(const ControlCommand& c) noexcept {
 void AudioPipeline::setStereoWide(bool enabled, double percent) noexcept {
     ControlCommand c{}; c.kind = 1; c.b0 = enabled; c.d0 = percent; (void)publish(c);
 }
+void AudioPipeline::setBalance(bool enabled, double normalized) noexcept {
+    ControlCommand c{}; c.kind = 3; c.b0 = enabled; c.d0 = normalized; (void)publish(c);
+}
+void AudioPipeline::setMono(bool enabled) noexcept {
+    ControlCommand c{}; c.kind = 4; c.b0 = enabled; (void)publish(c);
+}
+void AudioPipeline::setLimiter(bool enabled, LimiterPath path) noexcept {
+    ControlCommand c{}; c.kind = 5; c.b0 = enabled; c.i0 = static_cast<int>(path); (void)publish(c);
+}
 bool AudioPipeline::setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept {
     if (index < 0 || index >= kMaxEqBands || type < 0 || type > 5 ||
         frequencyHz < 1 || frequencyHz > 24000 || q < 0.1 || q > 12.0 ||
@@ -280,6 +389,9 @@ void AudioPipeline::applyPendingControls() noexcept {
         controlTail_.store(tail + 1, std::memory_order_release);
         if (c.kind == 1) dsp_.setStereoWide(c.b0, c.d0);
         else if (c.kind == 2) (void)dsp_.setEqBand(c.i0, c.b0, c.i1, c.i2, c.d0, c.d1, c.i3);
+        else if (c.kind == 3) dsp_.setBalance(c.b0, c.d0);
+        else if (c.kind == 4) dsp_.setMono(c.b0);
+        else if (c.kind == 5) dsp_.setLimiter(c.b0, static_cast<LimiterPath>(c.i0));
     }
 }
 bool AudioPipeline::enqueueInput(const float* x, std::size_t frames) noexcept { return input_.push(x, frames); }

@@ -48,3 +48,20 @@ Java_com_auralis_NativeAudioEngine_nativeSetEqBand(JNIEnv*, jclass, jlong handle
     if (!p) return JNI_FALSE;
     return p->setEqBand(index, enabled == JNI_TRUE, type, frequency, q, gain, channel) ? JNI_TRUE : JNI_FALSE;
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetBalance(JNIEnv*, jclass, jlong handle, jboolean enabled, jdouble normalized) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (p) p->setBalance(enabled == JNI_TRUE, normalized);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetMono(JNIEnv*, jclass, jlong handle, jboolean enabled) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (p) p->setMono(enabled == JNI_TRUE);
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetLimiter(JNIEnv*, jclass, jlong handle, jboolean enabled, jint path) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (!p || path < 0 || path > 1) return;
+    p->setLimiter(enabled == JNI_TRUE, static_cast<auralis::LimiterPath>(path));
+}

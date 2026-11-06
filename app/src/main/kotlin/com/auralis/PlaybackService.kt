@@ -35,6 +35,11 @@ class PlaybackService : Service() {
     @Volatile private var session: PlaybackSession? = null
     @Volatile private var stereoEnabled = false
     @Volatile private var stereoPercent = 0.0
+    @Volatile private var balanceEnabled = false
+    @Volatile private var balanceNormalized = 0.0
+    @Volatile private var monoEnabled = false
+    @Volatile private var limiterEnabled = false
+    @Volatile private var limiterPath = 0
     private val eqSettings = ConcurrentHashMap<Int, EqSetting>()
 
     override fun onCreate() {
@@ -67,6 +72,30 @@ class PlaybackService : Service() {
             stereoEnabled = enabled
             stereoPercent = percent.coerceIn(0, 100).toDouble()
             session?.engine?.setStereoWide(stereoEnabled, stereoPercent)
+        }
+    }
+
+    fun setBalance(enabled: Boolean, normalized: Double) {
+        synchronized(configLock) {
+            balanceEnabled = enabled
+            balanceNormalized = normalized.coerceIn(-1.0, 1.0)
+            session?.engine?.setBalance(balanceEnabled, balanceNormalized)
+        }
+    }
+
+    fun setMono(enabled: Boolean) {
+        synchronized(configLock) {
+            monoEnabled = enabled
+            session?.engine?.setMono(enabled)
+        }
+    }
+
+    // path 0 = hard 1.0 ceiling; path 1 = gain-derived protection ceiling.
+    fun setLimiter(enabled: Boolean, path: Int) {
+        synchronized(configLock) {
+            limiterEnabled = enabled
+            limiterPath = path.coerceIn(0, 1)
+            session?.engine?.setLimiter(limiterEnabled, limiterPath)
         }
     }
 
@@ -111,6 +140,9 @@ class PlaybackService : Service() {
             val nativeEngine = NativeAudioEngine(sampleRate)
             synchronized(configLock) {
                 nativeEngine.setStereoWide(stereoEnabled, stereoPercent)
+                nativeEngine.setBalance(balanceEnabled, balanceNormalized)
+                nativeEngine.setMono(monoEnabled)
+                nativeEngine.setLimiter(limiterEnabled, limiterPath)
                 eqSettings.values.forEach { e ->
                     nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
                 }
