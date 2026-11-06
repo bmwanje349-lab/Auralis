@@ -36,6 +36,13 @@ class MainActivity : Activity() {
     private lateinit var stereoToggle: CheckBox
     private lateinit var stereoValue: TextView
     private lateinit var stereoSlider: SeekBar
+    private lateinit var balanceToggle: CheckBox
+    private lateinit var balanceValue: TextView
+    private lateinit var balanceSlider: SeekBar
+    private lateinit var monoToggle: CheckBox
+    private lateinit var limiterToggle: CheckBox
+    private lateinit var limiterPathButton: Button
+    private var limiterPath = 0
     private lateinit var eqContainer: LinearLayout
     private lateinit var eqCount: TextView
     private val eqControls = mutableListOf<EqUiControl>()
@@ -148,6 +155,62 @@ class MainActivity : Activity() {
         }
         page.addView(stereoSlider, matchWrap())
 
+        addSection(page, "BALANCE", "Positive values attenuate left; negative values attenuate right")
+        balanceToggle = CheckBox(this).apply {
+            text = "Enable Balance"
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, checked ->
+                playback?.setBalance(checked, (balanceSlider.progress - 100) / 100.0)
+            }
+        }
+        page.addView(balanceToggle)
+        balanceValue = label("Center · left 0.0 dB · right 0.0 dB")
+        page.addView(balanceValue)
+        balanceSlider = SeekBar(this).apply {
+            max = 200
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                    val normalized = (value - 100) / 100.0
+                    val db = 48.0 * kotlin.math.abs(normalized)
+                    balanceValue.text = when {
+                        normalized > 0.0 -> "Right bias · left −${"%.1f".format(db)} dB"
+                        normalized < 0.0 -> "Left bias · right −${"%.1f".format(db)} dB"
+                        else -> "Center · left 0.0 dB · right 0.0 dB"
+                    }
+                    playback?.setBalance(balanceToggle.isChecked, normalized)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        page.addView(balanceSlider, matchWrap())
+
+        addSection(page, "MONO", "Native (L+R)/2 fold-down")
+        monoToggle = CheckBox(this).apply {
+            text = "Enable Mono"
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, checked -> playback?.setMono(checked) }
+        }
+        page.addView(monoToggle)
+
+        addSection(page, "PEAK LIMITER", "Linked stereo detector · native envelope attack/release")
+        limiterToggle = CheckBox(this).apply {
+            text = "Enable Limiter"
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, checked -> playback?.setLimiter(checked, limiterPath) }
+        }
+        page.addView(limiterToggle)
+        limiterPathButton = Button(this).apply {
+            text = "Path: Hard ceiling (1.0)"
+            setOnClickListener {
+                limiterPath = if (limiterPath == 0) 1 else 0
+                text = if (limiterPath == 0) "Path: Hard ceiling (1.0)" else "Path: Pre-gain protection"
+                playback?.setLimiter(limiterToggle.isChecked, limiterPath)
+            }
+        }
+        page.addView(limiterPathButton, matchWrap())
+
         addSection(page, "PARAMETRIC EQ", "Up to 64 bands · recovered six-filter biquad model")
         eqCount = label("0 / 64 bands")
         page.addView(eqCount)
@@ -162,7 +225,7 @@ class MainActivity : Activity() {
         updateEqCount()
 
         page.addView(TextView(this).apply {
-            text = "This player uses Android media decoding and native Float32 stereo processing. StereoWide and the six EQ coefficient families are implemented from the supplied Poweramp research. Channel code meanings below the documented 0–2 range use Auralis's local UI mapping."
+            text = "This player uses Android media decoding and native Float32 stereo processing. The recovered playback chain includes StereoWide, Mono fold-down, Balance and the linked-peak Limiter, alongside the six EQ coefficient families. Channel code meanings below the documented 0–2 range use Auralis's local UI mapping."
             textSize = 11f
             setTextColor(Color.rgb(143, 160, 170))
             setPadding(0, dp(26), 0, dp(8))
@@ -357,6 +420,9 @@ class MainActivity : Activity() {
 
     private fun syncControls() {
         playback?.setStereoWide(stereoToggle.isChecked, stereoSlider.progress)
+        playback?.setBalance(balanceToggle.isChecked, (balanceSlider.progress - 100) / 100.0)
+        playback?.setMono(monoToggle.isChecked)
+        playback?.setLimiter(limiterToggle.isChecked, limiterPath)
         eqControls.forEach { c ->
             val db = (c.gain.progress - 150) / 10.0
             playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, c.channel)
