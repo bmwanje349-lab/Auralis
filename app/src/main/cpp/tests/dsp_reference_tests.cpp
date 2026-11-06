@@ -50,27 +50,73 @@ int main() {
     wide.process(bypass,1);
     check(near(bypass[0],0.75) && near(bypass[1],-0.25),"StereoWide disabled bypass leaves samples unchanged");
 
-    // Limiter: test only recovered per-frame envelope equations; no detector is assumed.
+    // Balance: positive balance attenuates left; negative balance attenuates right.
+    Balance balance;
+    balance.configure(true,0.25);
+    check(near(balance.leftGain(),std::pow(10.0,-12.0/20.0)) && near(balance.rightGain(),1.0),
+          "Balance +0.25 attenuates left by 12 dB and leaves right at unity");
+    float positiveBalance[] = {1.0f,1.0f};
+    balance.process(positiveBalance,1);
+    check(near(positiveBalance[0],std::pow(10.0,-12.0/20.0)) && near(positiveBalance[1],1.0),
+          "Balance positive sign routes attenuation to the left channel");
+    balance.configure(true,-1.0);
+    float negativeBalance[] = {1.0f,1.0f};
+    balance.process(negativeBalance,1);
+    check(near(negativeBalance[0],1.0) && near(negativeBalance[1],std::pow(10.0,-48.0/20.0)),
+          "Balance negative sign routes full attenuation to the right channel");
+    balance.configure(false,1.0);
+    float balanceBypass[] = {0.5f,-0.25f};
+    balance.process(balanceBypass,1);
+    check(near(balanceBypass[0],0.5) && near(balanceBypass[1],-0.25),
+          "Disabled Balance bypasses samples");
+
+    Mono mono;
+    mono.configure(true);
+    float monoInput[] = {1.0f,-0.5f};
+    mono.process(monoInput,1);
+    check(near(monoInput[0],0.25) && near(monoInput[1],0.25),
+          "Mono uses (L+R)/2 and writes the average to both channels");
+
+    // Limiter: native linked stereo peak detector, shared envelope/applied-gain state,
+    // scalar tail, four-frame vector update and gain-protection ceiling.
     Limiter limiter;
     limiter.configure(true,LimiterPath::HardCeiling,1.0);
-    check(near(limiter.advance(0.5),1.0-1.0/256.0),"Limiter attack is max(target,current-1/256)");
-    check(near(limiter.advance(0.5),1.0-2.0/256.0),"Limiter attack advances by 1/256 on each frame");
-    const double afterAttack=limiter.gain();
-    check(near(limiter.advance(1.0),afterAttack+1.0/16384.0),"Limiter release advances by 1/16384");
+    for(int i=0;i<128;++i) limiter.advance(0.5);
+    check(near(limiter.targetGain(),0.5) && near(limiter.gain(),0.5),
+          "Limiter scalar attack reaches the 0.5 target in 128 frames at 1/256 per frame");
+    const double beforeRelease=limiter.gain();
+    limiter.advance(1.0);
+    check(near(limiter.targetGain(),0.5+1.0/16384.0) &&
+          near(limiter.gain(),beforeRelease+1.0/16384.0),
+          "Limiter envelope and applied gain recover at 1/16384 per scalar frame");
     limiter.reset();
-    check(near(limiter.advance(1.0),1.0),"Limiter release is capped at unity");
-    Limiter separate;
-    separate.configure(true,LimiterPath::HardCeiling,1.0);
-    for(int i=0;i<128;++i) separate.advance(0.5);
-    const double hardState=separate.gain();
-    separate.configure(true,LimiterPath::ConfigurableThreshold,0.5);
-    for(int i=0;i<192;++i) separate.advance(0.25);
-    const double thresholdState=separate.gain();
-    separate.configure(true,LimiterPath::HardCeiling,1.0);
-    check(near(hardState,0.5) && near(thresholdState,0.25) && near(separate.gain(),hardState),
-          "Limiter hard-ceiling and configurable-threshold paths retain separate states");
-    check(near(Limiter::kAttackStep,1.0/256.0) && near(Limiter::kReleaseStep,1.0/16384.0),
-          "Limiter constants match recovered scalar increments");
+    float linked[] = {0.25f,2.0f};
+    limiter.process(linked,1);
+    check(near(limiter.gain(),1.0-1.0/256.0) &&
+          near(linked[0],0.25*(1.0-1.0/256.0)) &&
+          near(linked[1],2.0*(1.0-1.0/256.0)),
+          "Limiter links left/right peak and applies the same scalar gain to both channels");
+    limiter.reset();
+    float vectorGroup[] = {2.0f,0.25f,0.5f,1.0f,0.25f,0.1f,0.3f,0.5f};
+    limiter.process(vectorGroup,4);
+    const double vectorGain=1.0-4.0/256.0;
+    check(near(limiter.targetGain(),0.5) && near(limiter.gain(),vectorGain) &&
+          near(vectorGroup[0],2.0*vectorGain) && near(vectorGroup[7],0.5*vectorGain),
+          "Limiter four-frame vector path uses linked eight-sample peak and four scalar attack steps");
+    limiter.reset();
+    limiter.configure(true,LimiterPath::ConfigurableThreshold,0.5);
+    float configurable[] = {1.0f,0.25f};
+    limiter.process(configurable,1);
+    check(near(limiter.targetGain(),0.5) && near(limiter.gain(),1.0-1.0/256.0),
+          "Limiter configurable path derives target as threshold divided by linked peak");
+    limiter.configure(true,LimiterPath::HardCeiling,1.0);
+    check(near(limiter.gain(),1.0-1.0/256.0),
+          "Limiter hard and configurable paths share one native envelope/applied-gain state");
+    check(near(Limiter::kAttackStep,1.0/256.0) &&
+          near(Limiter::kReleaseStep,1.0/16384.0) &&
+          near(Limiter::kVectorAttackStep,4.0/256.0) &&
+          near(Limiter::kVectorReleaseStep,4.0/16384.0),
+          "Limiter scalar and four-frame vector coefficients match recovered processing widths");
 
     // EQ: calculate each supplied coefficient family and compare normalized coefficients.
     constexpr double pi=3.1415926535897932384626433832795;
@@ -209,11 +255,27 @@ int main() {
     float block[]={1.0f,0.0f};
     check(pipeline.setEqBand(0,false,4,90,0.8,6.0,0),"Pipeline accepts an in-range EQ update");
     check(!pipeline.setEqBand(0,true,4,90,0.01,6.0,0),"Pipeline rejects EQ Q outside recovered range");
+    pipeline.setMono(false);
+    pipeline.setBalance(false,0.0);
+    pipeline.setLimiter(false,LimiterPath::HardCeiling);
     check(pipeline.enqueueInput(block,1),"Pipeline accepts decoded audio");
     check(pipeline.processOne()==1,"Native DSP stage processes one block");
     float rendered[2]{};
     check(pipeline.dequeueOutput(rendered,1)==1 && near(rendered[0],2.0) && near(rendered[1],-1.0),
           "Pipeline output matches recovered StereoWide transform");
+
+    AudioPipeline controlPipeline(48000);
+    controlPipeline.setBalance(true,1.0);
+    controlPipeline.setMono(false);
+    controlPipeline.setLimiter(false,LimiterPath::HardCeiling);
+    float balancedBlock[]={1.0f,1.0f};
+    check(controlPipeline.enqueueInput(balancedBlock,1) && controlPipeline.processOne()==1,
+          "Pipeline accepts a block with queued Balance controls");
+    float balancedRender[2]{};
+    check(controlPipeline.dequeueOutput(balancedRender,1)==1 &&
+          near(balancedRender[0],std::pow(10.0,-48.0/20.0)) && near(balancedRender[1],1.0),
+          "Pipeline applies native Balance routing on the DSP thread");
+
 
     if (failures!=0) {
         std::cerr << failures << " failed; " << passed << " passed\n";
