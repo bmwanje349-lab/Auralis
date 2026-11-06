@@ -253,17 +253,18 @@ void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
         return;
     }
 
-    // Native setter uses FMINNM(value, 1) followed by FMAXNM(value, 0).
-    // FMINNM/FMAXNM select the numeric operand when the other is NaN.
-    const double ui = std::isnan(value) ? 1.0 : clampd(value, 0.0, 1.0);
+    // The Java plugin sends Float32 values and the native setter uses FMINNM/FMAXNM.
+    // Carry out the clamp and transforms in float32 as the AArch64 instructions do.
+    const float input = static_cast<float>(value);
+    const float ui = std::isnan(input) ? 1.0f : std::max(0.0f, std::min(input, 1.0f));
     switch (index) {
-        case 0: params_.size = 0.01 + 0.99 * ui; nativeUpdateFlag_ = 2; break;
-        case 1: params_.filter = ui; nativeUpdateFlag_ = 1; break;
-        case 2: params_.fade = ui; nativeUpdateFlag_ = 1; break;
-        case 3: params_.preDelay = ui; nativeUpdateFlag_ = 2; break;
-        case 4: params_.mix = ui; nativeUpdateFlag_ = 1; break;
-        case 5: params_.preDelayMix = ui; nativeUpdateFlag_ = 1; break;
-        case 6: params_.damp = 1.0 - ui; nativeUpdateFlag_ = 1; break;
+        case 0: params_.size = static_cast<double>(std::fma(0.99f, ui, 0.01f)); nativeUpdateFlag_ = 2; break;
+        case 1: params_.filter = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
+        case 2: params_.fade = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
+        case 3: params_.preDelay = static_cast<double>(ui); nativeUpdateFlag_ = 2; break;
+        case 4: params_.mix = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
+        case 5: params_.preDelayMix = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
+        case 6: params_.damp = static_cast<double>(1.0f - ui); nativeUpdateFlag_ = 1; break;
         default: return;
     }
 }
