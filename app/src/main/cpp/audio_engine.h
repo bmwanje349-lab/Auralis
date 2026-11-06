@@ -136,7 +136,7 @@ private:
 };
 
 struct ReverbParameters {
-    double size = 0.0;
+    double size = 0.01;
     double filter = 0.0;
     double fade = 0.0;
     double preDelay = 0.0;
