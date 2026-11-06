@@ -70,10 +70,10 @@ int main() {
     check(near(balanceBypass[0],0.5) && near(balanceBypass[1],-0.25),
           "Disabled Balance bypasses samples");
 
-    Mono mono;
-    mono.configure(true);
+    Mono monoProcessor;
+    monoProcessor.configure(true);
     float monoInput[] = {1.0f,-0.5f};
-    mono.process(monoInput,1);
+    monoProcessor.process(monoInput,1);
     check(near(monoInput[0],0.25) && near(monoInput[1],0.25),
           "Mono uses (L+R)/2 and writes the average to both channels");
 
