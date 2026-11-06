@@ -239,15 +239,18 @@ void ReverbControlModel::setSampleRate(int sampleRate) noexcept {
     recalculateDelays();
 }
 void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
-    if (index == kNativeFlagOperationIndex) return;
+    if (index == kNativeFlagOperationIndex) {
+        nativeUpdateFlag_ = 1;
+        return;
+    }
     switch (index) {
-        case 0: params_.size = 0.01 + 0.99 * value; break;
-        case 1: params_.filter = value; break;
-        case 2: params_.fade = value; break;
-        case 3: params_.preDelay = value; break;
-        case 4: params_.mix = value; break;
-        case 5: params_.preDelayMix = value; break;
-        case 6: params_.damp = 1.0 - value; break;
+        case 0: params_.size = 0.01 + 0.99 * value; nativeUpdateFlag_ = 2; break;
+        case 1: params_.filter = value; nativeUpdateFlag_ = 1; break;
+        case 2: params_.fade = value; nativeUpdateFlag_ = 1; break;
+        case 3: params_.preDelay = value; nativeUpdateFlag_ = 2; break;
+        case 4: params_.mix = value; nativeUpdateFlag_ = 1; break;
+        case 5: params_.preDelayMix = value; nativeUpdateFlag_ = 1; break;
+        case 6: params_.damp = 1.0 - value; nativeUpdateFlag_ = 1; break;
         default: return;
     }
     recalculateDelays();
