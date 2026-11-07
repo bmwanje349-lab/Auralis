@@ -301,6 +301,26 @@ Findings at 48 kHz, default settings (Size 0.55, Filter 0.50, Fade 0.45, Pre-del
 
 Not yet done: matching the arithmetic bit for bit, the sample-rate dependence of the cutoff (only 48 kHz measured), locating the Damp low-pass, identifying the four fixed all-pass cells and the later stages with the same trace method, and wiring any of this into the audible Auralis reverb. The audible reverb is still the captured-response engine.
 
+### Where each native parameter acts (measured 2026-11-07, 48 kHz only)
+
+`tools/reverb-oracle/first_diff.py` changes one native parameter index at a time (0.1 and 0.9) from the default and reports the first internal buffer write, and the first output frame, that differs from the default trace (2,200 frames, left-channel impulse):
+
+| Native index | First differing buffer write | First differing output | Reading |
+|---|---|---|---|
+| 0 | none | none | No effect in this routine (see below) |
+| 1 | frame 0, input buffer | frame 0 | Filter: the input low-pass (cutoff 100 + 18,500 x value Hz) |
+| 2 | frame 1441 to 1443, late network | same frame | Fade: acts only inside the late network |
+| 3 | frame 0, input buffer position | 960 at 0.1, 1440 at default 0.15 | Pre-delay: sets when the late network starts receiving data |
+| 4 | none | frame 0 | Output stage only (Mix) |
+| 5 | none | frame 0 | Output stage only (Pre-delay Mix) |
+| 6 | frame 1441, late network | same frame | Damp: acts inside the late network, one frame after its first input |
+
+Pre-delay onset: the late network's first write lands at frame `9600 x value` at 48 kHz (960 at 0.10, 1440 at 0.15), which is 30 ms at the default and `value x 200 ms` generally. The earlier note in this file says the pre-delay "is not a millisecond value" and counts 0 to 200 samples; the measured onset, in units of 48 samples per count at 48 kHz, suggests the count is milliseconds at the sample rate. That has to be confirmed at 44.1 kHz before the earlier note is changed.
+
+Open item: native index 0 (the control the setter maps to Size) changes nothing, either in buffer writes over 2,200 frames or in the 32,768-frame impulse response, and calling the flag-only slot 7 afterwards (`FLAG7=1` in `grid_oracle_ir`) does not change that. Either Size is applied through a path this harness does not reach (the doc names a second processing core at `0x168940`) or index 0 is not Size. Do not rely on the index-to-control mapping for index 0.
+
+Structure seen in the traces: after a unit impulse the filtered input is written into one long delay buffer at four fixed offsets (gains about 1, 1, 0.6, 0.6; spacings 89, 60 and 69 ms), plus further buffers that first change at the late-network onset; the four all-pass buffers (230, 172, 609 and 446 samples) first receive data at that same onset. The wiring between them has not been identified.
+
 ### Reverb parameter sensitivity (measured 2026-11-07)
 
 The impulse-response comparison near the top of the Reverb section (36.9% RMSE) predates the captured-response engine. At the captured preset Auralis now reproduces Poweramp's steady-state output, and the native-oracle tests pass. The capture is valid for that one preset only.

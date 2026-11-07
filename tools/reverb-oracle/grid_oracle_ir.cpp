@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
   void* c = calloc(1, 0x4c8);
   init(c, 48000);
   for (unsigned i = 0; i < 7; i++) set(c, i, strtof(argv[2 + i], nullptr));
+  if (getenv("FLAG7")) set(c, 7, 1.0f);
   const bool right = argc > 9 && std::string(argv[9]) == "right";
   constexpr unsigned N = 1024, BLOCKS = 32; const unsigned WARM = getenv("WARM") ? atoi(getenv("WARM")) : 12;
   float x[2048];
