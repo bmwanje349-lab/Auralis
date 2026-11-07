@@ -287,6 +287,20 @@ Compressor evidence is UI/configuration only: `p000/wm0.java`, `dsp_compressor_e
 The pasted reference's product summary lists MP3, FLAC, ALAC, APE, DSD, WavPack, Opus, WMA, TTA, MKA, TAK and tracker formats; Hi-Res PCM up to 768 kHz where hardware allows; DSD64–DSD1024; USB DAC and Bluetooth; 64-band parametric EQ and 5–32-band graphic EQ; AutoEQ; ReplayGain; limiter, Reverb and Tempo; AudioTrack, OpenSL ES, AAudio, Hi-Res, USB Exclusive and Chromecast; 64-bit processing, resampling and dither. These are Poweramp capabilities as summarized in the supplied reference, not claims that the current Auralis app already implements all of them.
 
 
+### Reverb input filter (measured 2026-11-07)
+
+Method: `tools/reverb-oracle/reverb_trace.cpp` feeds a unit impulse through the installed reverb one frame at a time and prints every slot of the context's delay buffers that changes (`reverb_probe.cpp` lists the buffers; the context's buffer pointers carry a tag in the top byte, which must be masked). Each stage's response can then be read directly from what it writes.
+
+Findings at 48 kHz, default settings (Size 0.55, Filter 0.50, Fade 0.45, Pre-delay 0.15, Mix 1, Pre-delay Mix 0.5, Damp 0.5):
+
+- The first signal written (several delay buffers receive the same sequence, one slot per frame) is the response of a **second-order low-pass biquad** with Q = 1/sqrt(2). The recurrence `y[n] = p1*y[n-1] + p2*y[n-2]` fits with a residual of about 3e-9 (Float32 precision), and the numerator is in the ratio 1:2:1.
+- Its cutoff depends only on the Filter control and is linear: **cutoff = 100 Hz + 18,500 Hz x Filter** (checked at Filter 0, 0.1, 0.25, 0.5, 0.75, 0.9 and 1.0). Damp, Pre-delay and Pre-delay Mix do not change it.
+- The numerator carries an overall factor of 0.5, consistent with the input being the mono sum `(L+R)/2` (left-only impulse tested; right-only not yet).
+- The early output is 0.2 times this sequence on the left and 0.1 times on the right (frames 0 to 5 match to 7 digits).
+- `check_input_filter.py` models this stage in Float32 (RBJ low-pass, coefficients scaled by `1/a0`) and reproduces the native sequence to within 3e-8 absolute (1.2e-7 at Filter 0). It is **not bit-identical**: the native routine updates coefficients per block with a ramp and its exact operation order has not been matched.
+
+Not yet done: matching the arithmetic bit for bit, the sample-rate dependence of the cutoff (only 48 kHz measured), locating the Damp low-pass, identifying the four fixed all-pass cells and the later stages with the same trace method, and wiring any of this into the audible Auralis reverb. The audible reverb is still the captured-response engine.
+
 ### Reverb parameter sensitivity (measured 2026-11-07)
 
 The impulse-response comparison near the top of the Reverb section (36.9% RMSE) predates the captured-response engine. At the captured preset Auralis now reproduces Poweramp's steady-state output, and the native-oracle tests pass. The capture is valid for that one preset only.
