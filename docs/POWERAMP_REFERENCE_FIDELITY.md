@@ -41,7 +41,7 @@ The configurable ceiling is recalculated from the accumulated upstream linear ga
 ### Balance and Mono — native DSPI sample processing
 
 - Balance input is clamped to `[-1,+1]`.
-- Gain law: `G=10^(-48*abs(b)/20)`.
+- Gain law (superseded, see below): earlier notes gave `G=10^(-48*abs(b)/20)`; the native handler (`0x21FC10`, plugin type 3, case at `0x21FE5C`) computes in Float32: the value clamps to [-1, 1] (NaN and values below -1 become -1); positive values set flag `0x10` and multiply the left channel by `exp2f(b * -7.97263)` stored at `+0x108`; negative values set flag `0x20` and multiply the right channel by `exp2f(b * 7.97263)` stored at `+0x10C` (constants `0xC0FF1FC4` / `0x40FF1FC4`); exactly +1 or -1 stores a gain of exactly 0, so that channel is silent rather than 48 dB down; 0 clears both flags. Mono (flag `0x08`) runs first and writes `(L+R)*0.5` to both channels. Auralis matches this bit for bit; checked by `tools/reverb-oracle/balance_mono_oracle.cpp` against the installed library (528 cases incl. NaN, infinity, 0, +/-1).
 - Positive balance activates the left-channel attenuation branch; negative balance activates the right-channel branch.
 - Mono uses `M=(L+R)/2` and writes `M` to both output channels.
 - The native DSPI callback applies Mono before Balance; Auralis preserves that relative order.
@@ -77,7 +77,7 @@ A direct 48 kHz Float32 impulse comparison was run with matching default paramet
 
 The native reference model also retains:
 
-- Balance law and sign routing are implemented: positive normalized balance attenuates left; negative normalized balance attenuates right. `G=10^(-48*abs(b)/20)`.
+- Balance law and sign routing are implemented and verified against the native code: positive normalized balance attenuates left; negative attenuates right. The native handler (`0x21FC10`, plugin type 3, case at `0x21FE5C`) computes in Float32: the value clamps to [-1, 1] (NaN and values below -1 become -1); positive values set flag `0x10` and multiply the left channel by `exp2f(b * -7.97263)` stored at `+0x108`; negative values set flag `0x20` and multiply the right channel by `exp2f(b * 7.97263)` stored at `+0x10C` (constants `0xC0FF1FC4` / `0x40FF1FC4`); exactly +1 or -1 stores a gain of exactly 0, so that channel is silent rather than 48 dB down; 0 clears both flags. Mono (flag `0x08`) runs first and writes `(L+R)*0.5` to both channels. Auralis matches this bit for bit; checked by `tools/reverb-oracle/balance_mono_oracle.cpp` against the installed library (528 cases incl. NaN, infinity, 0, +/-1).
 - Tempo's user-facing bounds of 0.5× to 3.0×; no time-stretch kernel is supplied by the reference record.
 - Resampler cutoff bounds 80–99% and default 97, plus the P2D `R={8,16,32,64,128}`, `N={3,4}` families and FAST/BALANCED flags. The exact resampler kernel is not supplied.
 - Dither choices 1–9 by name; their native indices are retained as 1–9. The noise-shaping coefficient sets are not supplied.
@@ -230,7 +230,7 @@ Combined gain inputs are master, EQ preamp, no-DVC and track gain. The recovered
 
 ### Balance, volume modes, resampling and dither
 
-Balance attenuation magnitude is `10^(-48 × abs(b) / 20)`. Sign-to-channel routing is not recovered. Mono and Balance share descriptor slot 3.
+Balance: the native handler (`0x21FC10`, plugin type 3, case at `0x21FE5C`) computes in Float32: the value clamps to [-1, 1] (NaN and values below -1 become -1); positive values set flag `0x10` and multiply the left channel by `exp2f(b * -7.97263)` stored at `+0x108`; negative values set flag `0x20` and multiply the right channel by `exp2f(b * 7.97263)` stored at `+0x10C` (constants `0xC0FF1FC4` / `0x40FF1FC4`); exactly +1 or -1 stores a gain of exactly 0, so that channel is silent rather than 48 dB down; 0 clears both flags. Mono (flag `0x08`) runs first and writes `(L+R)*0.5` to both channels. Auralis matches this bit for bit; checked by `tools/reverb-oracle/balance_mono_oracle.cpp` against the installed library (528 cases incl. NaN, infinity, 0, +/-1). Mono and Balance share descriptor slot 3.
 
 Volume-mode names from `im.java` and `el1.java`: NORMAL, NORMAL_SOFTWARE, CUSTOM, SOFTWARE, HARDWARE, HARDWARE_DAP, FIXED, UNDECIDED. Numeric native IDs were not recovered. The volume-level list positions 1–101 map to values 0–100, not mode IDs. Preferences include `dvc_enabled=true` and `compensate_dvc_vol=false` in some Android 15+ contexts.
 

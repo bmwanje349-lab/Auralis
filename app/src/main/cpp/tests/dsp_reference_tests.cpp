@@ -96,7 +96,7 @@ int main() {
     // Balance: positive balance attenuates left; negative balance attenuates right.
     Balance balance;
     balance.configure(true,0.25);
-    check(near(balance.leftGain(),std::pow(10.0,-12.0/20.0)) && near(balance.rightGain(),1.0),
+    check(near(balance.leftGain(),std::pow(10.0,-12.0/20.0),1e-6) && near(balance.rightGain(),1.0),
           "Balance +0.25 attenuates left by 12 dB and leaves right at unity");
     float positiveBalance[] = {1.0f,1.0f};
     balance.process(positiveBalance,1);
@@ -105,8 +105,8 @@ int main() {
     balance.configure(true,-1.0);
     float negativeBalance[] = {1.0f,1.0f};
     balance.process(negativeBalance,1);
-    check(near(negativeBalance[0],1.0) && near(negativeBalance[1],std::pow(10.0,-48.0/20.0)),
-          "Balance negative sign routes full attenuation to the right channel");
+    check(near(negativeBalance[0],1.0) && near(negativeBalance[1],0.0),
+          "Balance -1 routes an exact-zero gain (full silence) to the right channel, as native does");
     balance.configure(false,1.0);
     float balanceBypass[] = {0.5f,-0.25f};
     balance.process(balanceBypass,1);
@@ -517,7 +517,7 @@ int main() {
           "Spatial chain accepts a block with StereoWide, Mono and Balance enabled");
     float spatialOrderOutput[2]{};
     check(spatialOrderPipeline.dequeueOutput(spatialOrderOutput,1)==1 &&
-          near(spatialOrderOutput[0],0.5*std::pow(10.0,-48.0/20.0),1e-8) &&
+          near(spatialOrderOutput[0],0.0) &&
           near(spatialOrderOutput[1],0.5,1e-7),
           "Spatial chain applies StereoWide before Mono fold-down and Balance attenuation");
 
@@ -546,7 +546,7 @@ int main() {
           "Pipeline accepts a block with queued Balance controls");
     float balancedRender[2]{};
     check(controlPipeline.dequeueOutput(balancedRender,1)==1 &&
-          near(balancedRender[0],std::pow(10.0,-48.0/20.0)) && near(balancedRender[1],1.0),
+          near(balancedRender[0],0.0) && near(balancedRender[1],1.0),
           "Pipeline applies native Balance routing on the DSP thread");
 
     AudioPipeline replayGainPipeline(48000);

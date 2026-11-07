@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace auralis {
@@ -221,12 +222,23 @@ void StereoWide::process(double* x, std::size_t frames) const noexcept {
 
 void Balance::configure(bool enabled, double normalized) noexcept {
     enabled_ = enabled;
-    balance_ = clampd(normalized, -1.0, 1.0);
+    // Native handler (plugin type 3, 0x21FE5C): the value is a Float32; > 1 clamps to 1,
+    // while < -1 and NaN both clamp to -1. Positive attenuates the left channel and
+    // negative the right, with gain = exp2f(value * +/-7.97263) (log2(10) * 2.4, from
+    // 0xC0FF1FC4 / 0x40FF1FC4). The extremes +/-1 store an exact zero gain, so that
+    // channel is silenced rather than reduced by 48 dB.
+    float p = static_cast<float>(normalized);
+    if (p > 1.0f) p = 1.0f;
+    else if (!(p >= -1.0f)) p = -1.0f;
+    balance_ = static_cast<double>(p);
     leftGain_ = 1.0;
     rightGain_ = 1.0;
-    const double attenuation = recoveredBalanceAttenuation(balance_);
-    if (balance_ > 0.0) leftGain_ = attenuation;
-    else if (balance_ < 0.0) rightGain_ = attenuation;
+    const auto bits = [](std::uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
+    if (p > 0.0f) {
+        leftGain_ = (p == 1.0f) ? 0.0 : static_cast<double>(std::exp2(p * bits(0xC0FF1FC4u)));
+    } else if (p < 0.0f) {
+        rightGain_ = (p == -1.0f) ? 0.0 : static_cast<double>(std::exp2(p * bits(0x40FF1FC4u)));
+    }
 }
 void Balance::process(float* x, std::size_t frames) const noexcept {
     if (!enabled_ || x == nullptr || balance_ == 0.0) return;
