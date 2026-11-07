@@ -40,6 +40,8 @@ class PlaybackService : Service() {
     @Volatile private var monoEnabled = false
     @Volatile private var limiterEnabled = false
     @Volatile private var limiterPath = 0
+    @Volatile private var reverbEnabled = false
+    private val reverbParameters = doubleArrayOf(0.55, 0.50, 0.45, 0.15, 1.00, 0.50, 0.50)
     private val eqSettings = ConcurrentHashMap<Int, EqSetting>()
 
     override fun onCreate() {
@@ -99,6 +101,22 @@ class PlaybackService : Service() {
         }
     }
 
+    fun setReverbEnabled(enabled: Boolean) {
+        synchronized(configLock) {
+            reverbEnabled = enabled
+            session?.engine?.setReverbEnabled(enabled)
+        }
+    }
+
+    fun setReverbParameter(index: Int, value: Double) {
+        if (index !in 0..6) return
+        synchronized(configLock) {
+            val normalized = value.coerceIn(0.0, 1.0)
+            reverbParameters[index] = normalized
+            session?.engine?.setReverbParameter(index, normalized)
+        }
+    }
+
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int,
                   q: Double, gainDb: Double, channel: Int = 0): Boolean {
         synchronized(configLock) {
@@ -143,6 +161,8 @@ class PlaybackService : Service() {
                 nativeEngine.setBalance(balanceEnabled, balanceNormalized)
                 nativeEngine.setMono(monoEnabled)
                 nativeEngine.setLimiter(limiterEnabled, limiterPath)
+                reverbParameters.forEachIndexed { index, value -> nativeEngine.setReverbParameter(index, value) }
+                nativeEngine.setReverbEnabled(reverbEnabled)
                 eqSettings.values.forEach { e ->
                     nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
                 }

@@ -17,6 +17,11 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
     fun setBalance(enabled: Boolean, normalized: Double) = nativeSetBalance(handle, enabled, normalized.coerceIn(-1.0, 1.0))
     fun setMono(enabled: Boolean) = nativeSetMono(handle, enabled)
     fun setLimiter(enabled: Boolean, path: Int) = nativeSetLimiter(handle, enabled, path.coerceIn(0, 1))
+    fun setReverbEnabled(enabled: Boolean) = nativeSetReverbEnabled(handle, enabled)
+    fun setReverbParameter(index: Int, value: Double) {
+        require(index in 0..6)
+        nativeSetReverbParameter(handle, index, value.coerceIn(0.0, 1.0))
+    }
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int, q: Double, gainDb: Double, channel: Int = 0): Boolean =
         nativeSetEqBand(handle, index, enabled, type, frequencyHz, q, gainDb, channel)
 
@@ -40,6 +45,8 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
         @JvmStatic private external fun nativeSetBalance(handle: Long, enabled: Boolean, normalized: Double)
         @JvmStatic private external fun nativeSetMono(handle: Long, enabled: Boolean)
         @JvmStatic private external fun nativeSetLimiter(handle: Long, enabled: Boolean, path: Int)
+        @JvmStatic private external fun nativeSetReverbEnabled(handle: Long, enabled: Boolean)
+        @JvmStatic private external fun nativeSetReverbParameter(handle: Long, index: Int, value: Double)
         @JvmStatic private external fun nativeSetEqBand(handle: Long, index: Int, enabled: Boolean, type: Int,
                                                         frequencyHz: Int, q: Double, gainDb: Double, channel: Int): Boolean
     }

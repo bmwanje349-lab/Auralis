@@ -65,3 +65,15 @@ Java_com_auralis_NativeAudioEngine_nativeSetLimiter(JNIEnv*, jclass, jlong handl
     if (!p || path < 0 || path > 1) return;
     p->setLimiter(enabled == JNI_TRUE, static_cast<auralis::LimiterPath>(path));
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetReverbEnabled(JNIEnv*, jclass, jlong handle, jboolean enabled) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (p) p->setReverbEnabled(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetReverbParameter(JNIEnv*, jclass, jlong handle, jint index, jdouble value) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (p && index >= 0 && index <= 6) p->setReverbParameter(index, value);
+}

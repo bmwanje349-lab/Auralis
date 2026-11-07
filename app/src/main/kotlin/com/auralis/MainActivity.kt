@@ -33,6 +33,10 @@ class MainActivity : Activity() {
     private var pendingUri: Uri? = null
     private lateinit var trackTitle: TextView
     private lateinit var status: TextView
+    private lateinit var reverbToggle: CheckBox
+    private val reverbSliders = arrayOfNulls<SeekBar>(7)
+    private val reverbValueLabels = arrayOfNulls<TextView>(7)
+    private val reverbInitial = intArrayOf(55, 50, 45, 15, 100, 50, 50)
     private lateinit var stereoToggle: CheckBox
     private lateinit var stereoValue: TextView
     private lateinit var stereoSlider: SeekBar
@@ -128,6 +132,40 @@ class MainActivity : Activity() {
             text = "STOP"
             setOnClickListener { playback?.stopPlayback(); status.text = "Playback stopped" }
         }, matchWrap().apply { topMargin = dp(6) })
+
+        addSection(page, "REVERB", "Poweramp-mapped controls · experimental stereo reverb while matrix fidelity is verified")
+        reverbToggle = CheckBox(this).apply {
+            text = "Enable Reverb"
+            setTextColor(Color.WHITE)
+            setOnCheckedChangeListener { _, checked -> playback?.setReverbEnabled(checked) }
+        }
+        page.addView(reverbToggle)
+        val reverbNames = arrayOf("Size", "Filter", "Fade", "Pre-Delay", "Mix", "Pre-Delay Mix", "Damp")
+        for (index in reverbNames.indices) {
+            val label = label("${reverbNames[index]}: ${reverbInitial[index]}%")
+            reverbValueLabels[index] = label
+            page.addView(label)
+            val slider = SeekBar(this).apply {
+                max = 100
+                progress = reverbInitial[index]
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                        label.text = when (index) {
+                            1 -> "Filter: $value% · cutoff ${100 + 185 * value} Hz"
+                            2 -> "Fade: $value%"
+                            3 -> "Pre-Delay: $value% · ${"%.1f".format(value * 1.9921875)} ms"
+                            6 -> "Damp: $value% · cutoff ${18600 - 185 * value} Hz"
+                            else -> "${reverbNames[index]}: $value%"
+                        }
+                        playback?.setReverbParameter(index, value / 100.0)
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                })
+            }
+            reverbSliders[index] = slider
+            page.addView(slider, matchWrap())
+        }
 
         addSection(page, "STEREO WIDE", "Recovered Mid-Side implementation · g = 1 + 2p")
         stereoToggle = CheckBox(this).apply {
@@ -419,6 +457,10 @@ class MainActivity : Activity() {
     }
 
     private fun syncControls() {
+        playback?.setReverbEnabled(reverbToggle.isChecked)
+        reverbSliders.forEachIndexed { index, slider ->
+            slider?.let { playback?.setReverbParameter(index, it.progress / 100.0) }
+        }
         playback?.setStereoWide(stereoToggle.isChecked, stereoSlider.progress)
         playback?.setBalance(balanceToggle.isChecked, (balanceSlider.progress - 100) / 100.0)
         playback?.setMono(monoToggle.isChecked)

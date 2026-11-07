@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace auralis {
 
@@ -164,17 +165,86 @@ public:
     std::uint32_t lastNativeUpdateFlag() const noexcept { return nativeUpdateFlag_; }
     int sampleRate() const noexcept { return sampleRate_; }
     std::array<int, 4> nativeBufferLengthsSamples() const noexcept;
-    // Recovered from native allocator 0x16BF40. These are ring capacities, not
-    // independently addressable delay taps or Size-scaled time constants.
+    std::array<int, 15> nativeBufferStorageFloats() const noexcept;
+    std::array<int, 15> nativeDelayLengthsSamples() const noexcept;
+    // Native ReverbDSPPlugin.cpp tap offsets in this order: +0x14C/+150/+154,
+    // +0x16C/+170/+174, +0x18C/+190/+194, +0x1AC/+1B0/+1B4, then the
+    // six taps for packed bank +0x1C0 and the six taps for packed bank +0x1F0.
+    std::array<int, 24> nativeTapOffsetsSamples() const noexcept;
+    // Allocator families are logical capacities; stereo objects contain two
+    // contiguous channel planes and the backing strides are separately padded.
     static constexpr std::array<ReverbBufferFamily, 4> kNativeBufferFamilies{{
         {0.0127, 4}, {0.089, 6}, {0.150, 4}, {0.200, 1}
     }};
-    // Four initial all-pass feedback gains, followed by two late-network gains.
-    static constexpr std::array<double, 6> kRecoveredConstants = {0.75, 0.75, 0.625, 0.625, 0.25, 0.25};
+    // The active core has four fixed early diffusion periods, ten Size-scaled
+    // network periods, and one Fade-controlled pre-delay line. The order follows
+    // the native context pointer layout (0x28 through 0x1F0).
+    static constexpr std::array<float, 4> kNativeFixedDelaySeconds{{
+        0.0048f, 0.0036f, 0.0127f, 0.0093f
+    }};
+    static constexpr std::array<float, 8> kNativeSizeDelaySeconds{{
+        0.0200f, 0.0600f, 0.0300f, 0.0890f,
+        0.1500f, 0.1200f, 0.1400f, 0.1100f
+    }};
+    static constexpr std::array<float, 2> kNativeFixedTailDelaySeconds{{0.0890f, 0.0690f}};
+    // First four native all-pass gains, followed by the two fixed late diffusion gains.
+    static constexpr std::array<float, 6> kRecoveredConstants{{0.75f, 0.75f, 0.625f, 0.625f, 0.25f, 0.25f}};
 private:
     int sampleRate_ = 48000;
     ReverbParameters params_{};
     std::uint32_t nativeUpdateFlag_ = 0;
+};
+
+// Measured Poweramp Float32 steady-state Reverb. The 2x2 impulse matrix was
+// captured from the installed native callback at 48 kHz and verified against
+// arbitrary steady-state stereo input (not a guessed Schroeder approximation).
+class PowerampReverb {
+public:
+    explicit PowerampReverb(int sampleRate);
+    void setEnabled(bool enabled) noexcept;
+    void setNativeParameter(int index, double value) noexcept;
+    void process(float* interleavedStereo, std::size_t frames) noexcept;
+    const ReverbControlModel& controlModel() const noexcept { return controls_; }
+    std::array<int, 15> activeDelayLengthsSamples() const noexcept { return activeLengths_; }
+    std::array<int, 24> activeTapOffsetsSamples() const noexcept { return activeTapOffsets_; }
+    double filterCutoffHz(int index) const noexcept;
+    float lateAllpassCoefficient() const noexcept;
+    static float processNativeAllpassSample(std::vector<float>& ring, std::size_t length,
+                                            std::size_t& cursor, float input,
+                                            float coefficient) noexcept;
+private:
+    struct Complex { float re = 0.0f; float im = 0.0f; };
+    static constexpr std::size_t kBlockFrames = 1024;
+    static constexpr std::size_t kFftSize = 2048;
+    using FftBuffer = std::array<Complex, kFftSize>;
+    void configureDelays() noexcept;
+    void configureFilters() noexcept;
+    void initialiseFft() noexcept;
+    void configureKernel();
+    void transform(FftBuffer& values, bool inverse) const noexcept;
+    void processBlock(float* interleavedStereo, std::size_t frames) noexcept;
+    static Complex multiply(Complex a, Complex b) noexcept;
+    int sampleRate_;
+    ReverbControlModel controls_;
+    bool enabled_ = false;
+    bool hasProcessed_ = false;
+    std::array<int, 15> activeLengths_{};
+    std::array<int, 24> activeTapOffsets_{};
+    std::array<std::array<float, 5>, 2> filterCoefficients_{};
+    std::size_t kernelFrames_ = 0;
+    std::size_t partitions_ = 0;
+    std::size_t historyHead_ = 0;
+    std::array<Complex, kFftSize / 2> twiddles_{};
+    // Spectra order: output-L/input-L, output-L/input-R, output-R/input-L, output-R/input-R.
+    std::array<std::vector<Complex>, 4> kernelSpectra_{};
+    std::array<std::vector<Complex>, 2> inputHistory_{};
+    FftBuffer workLeft_{};
+    FftBuffer workRight_{};
+    FftBuffer sumLeft_{};
+    FftBuffer sumRight_{};
+    std::array<float, kBlockFrames> previousInputLeft_{};
+    std::array<float, kBlockFrames> previousInputRight_{};
+    float mixCurrent_ = 0.0f;
 };
 
 class AuralisDsp {
@@ -184,6 +254,8 @@ public:
     void setBalance(bool enabled, double normalized) noexcept;
     void setMono(bool enabled) noexcept;
     void setLimiter(bool enabled, LimiterPath path) noexcept;
+    void setReverbEnabled(bool enabled) noexcept;
+    void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
                    double gainDb, int channel) noexcept;
     void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
@@ -195,7 +267,7 @@ public:
     double balanceLeftGain() const noexcept { return balance_.leftGain(); }
     double balanceRightGain() const noexcept { return balance_.rightGain(); }
     double limiterGain() const noexcept { return limiter_.gain(); }
-    const ReverbControlModel& reverbModel() const noexcept { return reverb_; }
+    const ReverbControlModel& reverbModel() const noexcept { return reverb_.controlModel(); }
 private:
     int sampleRate_;
     std::array<EqBand, kMaxEqBands> bands_{};
@@ -205,7 +277,7 @@ private:
     Limiter limiter_{};
     ReplayGain replayGain_{};
     ReplayGainMetadata replayGainMetadata_{};
-    ReverbControlModel reverb_;
+    PowerampReverb reverb_;
     double eqPreampLinear_ = 1.0;
     double masterGainLinear_ = 1.0;
 };
@@ -242,6 +314,8 @@ public:
     void setBalance(bool enabled, double normalized) noexcept;
     void setMono(bool enabled) noexcept;
     void setLimiter(bool enabled, LimiterPath path) noexcept;
+    void setReverbEnabled(bool enabled) noexcept;
+    void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
 private:
     struct ControlCommand { int kind=0, i0=0, i1=0, i2=0, i3=0; double d0=0.0, d1=0.0; bool b0=false; };

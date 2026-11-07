@@ -229,15 +229,23 @@ int main() {
           "Reverb Size maps UI 1 to native 1 and requests native update flag 2");
     const auto lengths48=reverb.nativeBufferLengthsSamples();
     check(lengths48==std::array<int,4>{610,4272,7200,9600},
-          "Reverb allocator capacities at 48 kHz round the four native time families with FCVTAS");
+          "Reverb allocator capacities at 48 kHz round the exact native Float32 capacity constants with FCVTAS");
     check(ReverbControlModel::kNativeBufferFamilies[0].count==4 &&
           ReverbControlModel::kNativeBufferFamilies[1].count==6 &&
           ReverbControlModel::kNativeBufferFamilies[2].count==4 &&
           ReverbControlModel::kNativeBufferFamilies[3].count==1,
           "Reverb native allocator has 4 short, 6 medium, 4 long and 1 predelay ring buffers");
+    check(reverb.nativeBufferStorageFloats()==std::array<int,15>{
+              624,624,624,624,8544,8544,8544,8544,9600,
+              14400,14400,14400,14400,8544,8544},
+          "Reverb native allocator reproduces short mono, medium stereo, pre-delay, long stereo and packed stereo storage strides");
     reverb.setSampleRate(44100);
     check(reverb.nativeBufferLengthsSamples()==std::array<int,4>{560,3925,6615,8820},
-          "Reverb allocator capacities at 44.1 kHz use native float32 multiply and nearest rounding");
+          "Reverb allocator capacities at 44.1 kHz use native Float32 multiply and FCVTAS rounding");
+    check(reverb.nativeBufferStorageFloats()==std::array<int,15>{
+              560,560,560,560,7856,7856,7856,7856,8820,
+              13232,13232,13232,13232,7856,7856},
+          "Reverb native channel-plane strides retain 16-float alignment at 44.1 kHz");
     reverb.setSampleRate(48000);
     reverb.setNativeParameter(0,0.0);
     check(near(reverb.parameters().size,0.01),"Reverb Size transform maps UI zero to 0.01");
@@ -254,6 +262,178 @@ int main() {
     reverb.setNativeParameter(6,0.25);
     check(near(reverb.parameters().damp,0.75) && reverb.lastNativeUpdateFlag()==1,
           "Reverb Damp transform equals 1-UI and requests native update flag 1");
+    ReverbControlModel reverbTiming(48000);
+    check(reverbTiming.nativeDelayLengthsSamples()==std::array<int,15>{230,172,609,446,9,28,14,42,0,72,57,67,52,4272,3312},
+          "Reverb first four delays are fixed; later delay lines scale with native minimum Size");
+    reverbTiming.setNativeParameter(0,1.0);
+    check(reverbTiming.nativeDelayLengthsSamples()==std::array<int,15>{230,172,609,446,960,2880,1440,4272,0,7200,5760,6720,5280,4272,3312},
+          "Reverb eight Size-dependent and two fixed tail delays match native 48 kHz Float32 timing constants");
+    reverbTiming.setNativeParameter(3,0.5);
+    check(reverbTiming.nativeDelayLengthsSamples()[8]==100,
+          "Reverb Pre-Delay uses the native 200-sample control range independent of sample rate");
+    ReverbControlModel reverbTapTiming(48000);
+    reverbTapTiming.setNativeParameter(0,0.55);
+    const std::array<int,24> expectedNativeTaps48k{{
+        1783,292,3220, 958,2368,0, 236,2634,0, 1783,109,0,
+        955,1051,1699,1867,1987,3321, 475,528,873,907,1022,2068
+    }};
+    check(reverbTapTiming.nativeTapOffsetsSamples()==expectedNativeTaps48k,
+          "Reverb four Size-dependent late-ring tap triplets and two six-tap banks match Poweramp at 48 kHz");
+    ReverbControlModel reverbTapTiming441(44100);
+    reverbTapTiming441.setNativeParameter(0,0.55);
+    const std::array<int,24> expectedNativeTaps441{{
+        1638,268,2958, 880,2176,0, 217,2420,0, 1638,100,0,
+        877,965,1561,1715,1825,3051, 436,485,802,833,939,1900
+    }};
+    check(reverbTapTiming441.nativeTapOffsetsSamples()==expectedNativeTaps441,
+          "Reverb auxiliary tap geometry scales with native 44.1 kHz sample-rate constants");
+    PowerampReverb reverbTapRuntime(48000);
+    reverbTapRuntime.setNativeParameter(0,0.55);
+    check(reverbTapRuntime.activeTapOffsetsSamples()==expectedNativeTaps48k,
+          "PowerampReverb refreshes the native tap map whenever Size reconfigures its delay network");
+    PowerampReverb reverbFilterProbe(48000);
+    check(near(reverbFilterProbe.filterCutoffHz(0),100.0) &&
+          near(reverbFilterProbe.filterCutoffHz(1),18600.0),
+          "Reverb Filter and inverted Damp establish independent native low-pass cutoffs");
+    reverbFilterProbe.setNativeParameter(6,0.5);
+    check(near(reverbFilterProbe.filterCutoffHz(1),9350.0),
+          "Reverb Damp UI value maps through native inverse storage to the second cutoff");
+    reverbFilterProbe.setNativeParameter(2,0.5);
+    check(reverbFilterProbe.controlModel().lastNativeUpdateFlag()==1,
+          "Reverb Fade index 2 requests native update flag 1, unlike structural Size/Pre-Delay changes");
+    check(near(reverbFilterProbe.lateAllpassCoefficient(),0.5,1e-7),
+          "Reverb Fade 50% drives the native later all-pass coefficient to the 0.5 upper bound");
+    reverbFilterProbe.setNativeParameter(2,0.2);
+    check(near(reverbFilterProbe.lateAllpassCoefficient(),0.3149,1e-6),
+          "Reverb Fade uses the native FMA affine mapping and 0.25–0.5 all-pass clamp");
+    reverbFilterProbe.setNativeParameter(2,0.0);
+    check(near(reverbFilterProbe.lateAllpassCoefficient(),0.25,1e-7),
+          "Reverb Fade zero reaches the native 0.25 all-pass coefficient floor");
+    std::vector<float> nativeAllpassProbe(1, 0.0f);
+    std::size_t nativeAllpassCursor = 0;
+    const float nativeAllpassFirst = PowerampReverb::processNativeAllpassSample(
+        nativeAllpassProbe, 1, nativeAllpassCursor, 1.0f, 0.75f);
+    check(near(nativeAllpassFirst,0.75) && near(nativeAllpassProbe[0],1.5625),
+          "Reverb early all-pass uses native coefficient*input-minus-delay and fused feedback write");
+    const float nativeAllpassSecond = PowerampReverb::processNativeAllpassSample(
+        nativeAllpassProbe, 1, nativeAllpassCursor, 0.0f, 0.75f);
+    check(near(nativeAllpassSecond,-1.5625) && near(nativeAllpassProbe[0],-1.171875),
+          "Reverb all-pass feedback polarity matches Poweramp on a wrapped one-sample delay");
+    PowerampReverb reverbRuntime(48000);
+    float reverbBypass[] = {0.25f, -0.5f};
+    reverbRuntime.process(reverbBypass, 1);
+    check(reverbBypass[0] == 0.25f && reverbBypass[1] == -0.5f,
+          "Reverb disabled path is an exact no-op");
+    reverbRuntime.setNativeParameter(4, 1.0);
+    reverbRuntime.setNativeParameter(5, 0.5);
+    reverbRuntime.setEnabled(true);
+    std::array<float, 4096> reverbImpulseBlock{};
+    std::array<float, 4096> reverbTailBlock{};
+    reverbImpulseBlock[0] = 1.0f;
+    reverbRuntime.process(reverbImpulseBlock.data(), 2048);
+    reverbRuntime.process(reverbTailBlock.data(), 2048);
+    bool reverbFinite = true;
+    bool reverbTailAudible = false;
+    for (float sample : reverbImpulseBlock) reverbFinite = reverbFinite && std::isfinite(sample);
+    for (float sample : reverbTailBlock) {
+        reverbFinite = reverbFinite && std::isfinite(sample);
+        reverbTailAudible = reverbTailAudible || std::abs(sample) > 1.0e-9f;
+    }
+    check(reverbFinite, "Reverb measured steady-state engine produces only finite samples across consecutive blocks");
+    check(reverbTailAudible, "Reverb measured steady-state engine retains delay state and produces a tail in the following silent block");
+
+    // Measured Poweramp steady-state 48 kHz MIMO impulse-response checks.
+    // These samples were captured from the native Float32 core after its two
+    // zero-input transition blocks; this intentionally tests the steady core,
+    // not the separate cold-start/transition callback route.
+    const auto setReferenceReverbProfile = [](PowerampReverb& engine) {
+        engine.setNativeParameter(0, 0.55);
+        engine.setNativeParameter(1, 0.50);
+        engine.setNativeParameter(2, 0.45);
+        engine.setNativeParameter(3, 0.15);
+        engine.setNativeParameter(4, 1.00);
+        engine.setNativeParameter(5, 0.50);
+        engine.setNativeParameter(6, 0.50);
+        engine.setEnabled(true);
+    };
+    PowerampReverb measuredLeftImpulse(48000);
+    setReferenceReverbProfile(measuredLeftImpulse);
+    std::array<float, 16384> measuredLeftBlock{}; // 8,192 interleaved stereo frames
+    measuredLeftBlock[0] = 1.0f;
+    measuredLeftImpulse.process(measuredLeftBlock.data(), 8192);
+    const std::array<std::array<double, 3>, 10> leftImpulseCheckpoints{{
+        {{0, 0.01982086897, 0.00991043821}},
+        {{1, 0.04773608595, 0.02386804298}},
+        {{951, 0.01193402149, 0.0}},
+        {{1443, 0.01027562842, 0.01027562842}},
+        {{2052, -0.01011572592, -0.01011572592}},
+        {{2405, 0.03709747642, 0.02277664840}},
+        {{2784, 0.01022319216, 0.05318567157}},
+        {{3313, 0.0005054753274, 0.07740864903}},
+        {{4273, 0.1267852038, -0.001386739081}},
+        {{7168, -0.0003596625174, -0.0003596625174}}
+    }};
+    for (const auto& checkpoint : leftImpulseCheckpoints) {
+        const std::size_t frame = static_cast<std::size_t>(checkpoint[0]);
+        check(near(measuredLeftBlock[2 * frame], checkpoint[1], 3.0e-6) &&
+              near(measuredLeftBlock[2 * frame + 1], checkpoint[2], 3.0e-6),
+              "Reverb left-input impulse matches measured Poweramp steady-state MIMO response");
+    }
+
+    PowerampReverb measuredRightImpulse(48000);
+    setReferenceReverbProfile(measuredRightImpulse);
+    std::array<float, 16384> measuredRightBlock{};
+    measuredRightBlock[1] = 1.0f;
+    measuredRightImpulse.process(measuredRightBlock.data(), 8192);
+    const std::array<std::array<double, 3>, 8> rightImpulseCheckpoints{{
+        {{0, 0.00991043821, 0.01982086897}},
+        {{1, 0.02386804298, 0.04773608595}},
+        {{951, 0.007160413545, 0.0}},
+        {{1443, 0.01027562842, 0.01027562842}},
+        {{2405, 0.02277664840, 0.03709747642}},
+        {{2784, 0.01022319216, 0.08182732761}},
+        {{3313, 0.0005054753274, 0.1286774129}},
+        {{4273, 0.07551643252, -0.001386739081}}
+    }};
+    for (const auto& checkpoint : rightImpulseCheckpoints) {
+        const std::size_t frame = static_cast<std::size_t>(checkpoint[0]);
+        check(near(measuredRightBlock[2 * frame], checkpoint[1], 3.0e-6) &&
+              near(measuredRightBlock[2 * frame + 1], checkpoint[2], 3.0e-6),
+              "Reverb right-input impulse matches measured Poweramp cross-channel response");
+    }
+
+    // A deterministic, mixed-channel input verifies the full MIMO convolution,
+    // not just two independent impulse paths.
+    PowerampReverb measuredMixed(48000);
+    setReferenceReverbProfile(measuredMixed);
+    std::array<float, 2048> deterministicStereo{};
+    for (int frame = 0; frame < 1024; ++frame) {
+        const int leftCode = (frame * 37 + 13) % 101 - 50;
+        const int rightCode = (frame * 17 + 7) % 83 - 41;
+        deterministicStereo[2 * frame] = static_cast<float>(leftCode) * 0.004f;
+        deterministicStereo[2 * frame + 1] = static_cast<float>(rightCode) * (1.0f / 300.0f);
+    }
+    measuredMixed.process(deterministicStereo.data(), 1024);
+    const std::array<std::array<double, 3>, 12> mixedCheckpoints{{
+        {{0, -0.004056662321, -0.003713116050}},
+        {{1, -0.01033157762, -0.01006574556}},
+        {{3, 0.003498114645, 0.0006802119315}},
+        {{7, 0.002289116383, -0.003216722980}},
+        {{15, 0.006050474942, 0.008481822908}},
+        {{31, -0.007033168338, -0.009605157189}},
+        {{63, 0.006650149822, 0.008746743202}},
+        {{127, 0.006417058408, 0.007415071130}},
+        {{255, -0.001339780167, -0.001818574965}},
+        {{511, 0.007406242192, 0.003058761358}},
+        {{767, 0.002918854356, 0.007415972650}},
+        {{1023, -0.001587495208, -0.004352688789}}
+    }};
+    for (const auto& checkpoint : mixedCheckpoints) {
+        const std::size_t frame = static_cast<std::size_t>(checkpoint[0]);
+        check(near(deterministicStereo[2 * frame], checkpoint[1], 4.0e-6) &&
+              near(deterministicStereo[2 * frame + 1], checkpoint[2], 4.0e-6),
+              "Reverb deterministic mixed-stereo render matches Poweramp native MIMO output");
+    }
     reverb.setNativeParameter(1,std::numeric_limits<double>::quiet_NaN());
     check(near(reverb.parameters().filter,1.0),
           "Reverb FMINNM/FMAXNM parameter clamp selects the numeric endpoint for NaN");

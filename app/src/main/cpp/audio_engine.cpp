@@ -1,4 +1,5 @@
 #include "audio_engine.h"
+#include "poweramp_reverb_ir_48k.h"
 
 #include <algorithm>
 #include <cmath>
@@ -252,12 +253,105 @@ std::array<int, 4> ReverbControlModel::nativeBufferLengthsSamples() const noexce
     std::array<int, 4> lengths{};
     const float rate = static_cast<float>(sampleRate_);
     for (std::size_t i = 0; i < kNativeBufferFamilies.size(); ++i) {
-        // Poweramp multiplies in float32 and uses FCVTAS (nearest, ties away from zero).
+        // The allocator uses Float32 multiplication followed by FCVTAS
+        // (round-to-nearest, ties away from zero) for capacity allocation.
         const float samples = rate * static_cast<float>(kNativeBufferFamilies[i].seconds);
         lengths[i] = static_cast<int>(std::lround(static_cast<double>(samples)));
     }
     return lengths;
 }
+
+std::array<int, 15> ReverbControlModel::nativeBufferStorageFloats() const noexcept {
+    const auto capacities = nativeBufferLengthsSamples();
+    const auto align16 = [](int value) noexcept { return (value + 15) & ~15; };
+    const int shortMono = align16(capacities[0]);
+    const int mediumStereo = align16(2 * capacities[1]);
+    const int longStereo = align16(2 * capacities[2]);
+    const int preDelayMono = capacities[3];
+    // Native context pointer order: four short mono APs, four stereo AP/FDN
+    // objects, one mono pre-delay, four long stereo lines, two packed stereo banks.
+    return {{shortMono, shortMono, shortMono, shortMono,
+             mediumStereo, mediumStereo, mediumStereo, mediumStereo,
+             preDelayMono,
+             longStereo, longStereo, longStereo, longStereo,
+             mediumStereo, mediumStereo}};
+}
+std::array<int, 15> ReverbControlModel::nativeDelayLengthsSamples() const noexcept {
+    std::array<int, 15> lengths{};
+    const float rate = static_cast<float>(sampleRate_);
+    const float size = static_cast<float>(params_.size); // native context +0x4C4
+    const float preDelay = static_cast<float>(params_.preDelay); // native context +0x4B4
+    // Context offsets +0x34/+0x4C/+0x64/+0x7C: these first four
+    // all-pass delays use fixed seconds and do not follow the Size slider.
+    for (std::size_t i = 0; i < kNativeFixedDelaySeconds.size(); ++i) {
+        lengths[i] = static_cast<int>(rate * kNativeFixedDelaySeconds[i]);
+    }
+    // The remaining delay lines use independent Size multipliers. FCVTZS in
+    // 0x169A30 truncates the Float32 sample count; it is not FCVTAS.
+    constexpr std::array<std::size_t, 8> destinations{{4,5,6,7,9,10,11,12}};
+    for (std::size_t i = 0; i < kNativeSizeDelaySeconds.size(); ++i) {
+        const float samples = rate * (size * kNativeSizeDelaySeconds[i]);
+        lengths[destinations[i]] = static_cast<int>(samples);
+    }
+    // The last two stereo output lines at +0x1C0/+0x1F0 are fixed at
+    // 89 ms and 69 ms; they do not scale with Size.
+    lengths[13] = static_cast<int>(rate * kNativeFixedTailDelaySeconds[0]);
+    lengths[14] = static_cast<int>(rate * kNativeFixedTailDelaySeconds[1]);
+    // Native +0x128 ring active length is FCVTZS(PreDelay * 200.0f). It is
+    // a 0..200-sample control, not 0..200 ms; only the allocated capacity at
+    // +0x138 scales with the sample rate.
+    const float predelayTarget = preDelay * 200.0f;
+    const float predelayCapacity = static_cast<float>(nativeBufferLengthsSamples()[3]);
+    lengths[8] = static_cast<int>(std::min(predelayTarget, predelayCapacity));
+    return lengths;
+}
+
+std::array<int, 24> ReverbControlModel::nativeTapOffsetsSamples() const noexcept {
+    std::array<int, 24> offsets{};
+    const float rate = static_cast<float>(sampleRate_);
+    const float size = static_cast<float>(params_.size);
+    const float sizeRate = rate * size;
+    const auto clampTap = [](float raw, int activeLength) noexcept {
+        if (activeLength <= 0 || !(raw > 0.0f)) return 0;
+        const int truncated = static_cast<int>(raw); // native FCVTZS
+        return std::clamp(truncated, 0, activeLength - 1);
+    };
+
+    // Four Size-dependent late stereo rings. These ratios are the native
+    // Float32 constants loaded by the 0x169A30 reconfiguration routine.
+    constexpr std::array<float, 12> lateRatios{{
+        0.067f, 0.011f, 0.121f,
+        0.036f, 0.089f, 0.0f,
+        0.0089f, 0.099f, 0.0f,
+        0.067f, 0.0041f, 0.0f
+    }};
+    constexpr std::array<std::size_t, 4> lateRingIndices{{9, 10, 11, 12}};
+    const auto lengths = nativeDelayLengthsSamples();
+    for (std::size_t group = 0; group < lateRingIndices.size(); ++group) {
+        const int activeLength = lengths[lateRingIndices[group]];
+        for (std::size_t tap = 0; tap < 3; ++tap) {
+            const std::size_t index = group * 3 + tap;
+            offsets[index] = clampTap(sizeRate * lateRatios[index], activeLength);
+        }
+    }
+
+    // The two packed stereo banks use fixed ratios of the native sample rate;
+    // they do not follow Size. Their six tap offsets are independently clamped.
+    constexpr std::array<float, 6> bank0Ratios{{
+        0.0199f, 0.0219f, 0.0354f, 0.0389f, 0.0414f, 0.0692f
+    }};
+    constexpr std::array<float, 6> bank1Ratios{{
+        0.0099f, 0.0110f, 0.0182f, 0.0189f, 0.0213f, 0.0431f
+    }};
+    const int bank0Length = lengths[13];
+    const int bank1Length = lengths[14];
+    for (std::size_t tap = 0; tap < 6; ++tap) {
+        offsets[12 + tap] = clampTap(rate * bank0Ratios[tap], bank0Length);
+        offsets[18 + tap] = clampTap(rate * bank1Ratios[tap], bank1Length);
+    }
+    return offsets;
+}
+
 void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
     if (index == kNativeFlagOperationIndex) {
         nativeUpdateFlag_ = 1;
@@ -265,18 +359,240 @@ void ReverbControlModel::setNativeParameter(int index, double value) noexcept {
     }
 
     // The Java plugin sends Float32 values and the native setter uses FMINNM/FMAXNM.
-    // Carry out the clamp and transforms in float32 as the AArch64 instructions do.
+    // Carry out the clamp and transforms in Float32 as the AArch64 instructions do.
     const float input = static_cast<float>(value);
     const float ui = std::isnan(input) ? 1.0f : std::max(0.0f, std::min(input, 1.0f));
     switch (index) {
+        // Setter index 0 writes Size to +0x4C4 (not +0x4AC).
         case 0: params_.size = static_cast<double>(std::fma(0.99f, ui, 0.01f)); nativeUpdateFlag_ = 2; break;
         case 1: params_.filter = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
         case 2: params_.fade = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
         case 3: params_.preDelay = static_cast<double>(ui); nativeUpdateFlag_ = 2; break;
         case 4: params_.mix = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
         case 5: params_.preDelayMix = static_cast<double>(ui); nativeUpdateFlag_ = 1; break;
+        // Setter index 6 writes Damp to +0x4AC as (1 - UI).
         case 6: params_.damp = static_cast<double>(1.0f - ui); nativeUpdateFlag_ = 1; break;
         default: return;
+    }
+}
+
+PowerampReverb::PowerampReverb(int sampleRate)
+    : sampleRate_(std::clamp(sampleRate, 8000, 192000)), controls_(sampleRate_) {
+    initialiseFft();
+    configureDelays();
+    configureFilters();
+    configureKernel();
+}
+
+void PowerampReverb::initialiseFft() noexcept {
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    for (std::size_t i = 0; i < twiddles_.size(); ++i) {
+        const float phase = -kTwoPi * static_cast<float>(i) / static_cast<float>(kFftSize);
+        twiddles_[i] = {std::cos(phase), std::sin(phase)};
+    }
+}
+
+PowerampReverb::Complex PowerampReverb::multiply(Complex a, Complex b) noexcept {
+    return {a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
+}
+
+void PowerampReverb::transform(FftBuffer& values, bool inverse) const noexcept {
+    std::size_t j = 0;
+    for (std::size_t i = 1; i < kFftSize; ++i) {
+        std::size_t bit = kFftSize >> 1;
+        while ((j & bit) != 0) { j ^= bit; bit >>= 1; }
+        j ^= bit;
+        if (i < j) std::swap(values[i], values[j]);
+    }
+    for (std::size_t length = 2; length <= kFftSize; length <<= 1) {
+        const std::size_t half = length >> 1;
+        const std::size_t stride = kFftSize / length;
+        for (std::size_t base = 0; base < kFftSize; base += length) {
+            for (std::size_t k = 0; k < half; ++k) {
+                Complex w = twiddles_[k * stride];
+                if (inverse) w.im = -w.im;
+                const Complex even = values[base + k];
+                const Complex odd = multiply(values[base + k + half], w);
+                values[base + k] = {even.re + odd.re, even.im + odd.im};
+                values[base + k + half] = {even.re - odd.re, even.im - odd.im};
+            }
+        }
+    }
+    if (inverse) {
+        constexpr float scale = 1.0f / static_cast<float>(kFftSize);
+        for (Complex& value : values) { value.re *= scale; value.im *= scale; }
+    }
+}
+
+void PowerampReverb::configureKernel() {
+    const double rateRatio = static_cast<double>(sampleRate_) /
+                             static_cast<double>(detail::kPowerampReverbIrSampleRate);
+    kernelFrames_ = std::max<std::size_t>(1, static_cast<std::size_t>(std::llround(
+        static_cast<double>(detail::kPowerampReverbIrFrames) * rateRatio)));
+    partitions_ = (kernelFrames_ + kBlockFrames - 1) / kBlockFrames;
+    historyHead_ = partitions_ - 1;
+    for (auto& kernel : kernelSpectra_) kernel.assign(partitions_ * kFftSize, Complex{});
+    for (auto& history : inputHistory_) history.assign(partitions_ * kFftSize, Complex{});
+
+    const std::array<const std::array<float, detail::kPowerampReverbIrFrames>*, 4> impulse{{
+        &detail::kPowerampReverbIrLL, &detail::kPowerampReverbIrLR,
+        &detail::kPowerampReverbIrRL, &detail::kPowerampReverbIrRR
+    }};
+    FftBuffer work{};
+    for (std::size_t path = 0; path < impulse.size(); ++path) {
+        for (std::size_t partition = 0; partition < partitions_; ++partition) {
+            work.fill(Complex{});
+            const std::size_t first = partition * kBlockFrames;
+            for (std::size_t i = 0; i < kBlockFrames; ++i) {
+                const std::size_t outputIndex = first + i;
+                if (outputIndex >= kernelFrames_) break;
+                const double sourcePosition = static_cast<double>(outputIndex) / rateRatio;
+                const std::size_t i0 = std::min(static_cast<std::size_t>(sourcePosition),
+                                                detail::kPowerampReverbIrFrames - 1);
+                const std::size_t i1 = std::min(i0 + 1, detail::kPowerampReverbIrFrames - 1);
+                const float fraction = static_cast<float>(sourcePosition - static_cast<double>(i0));
+                const float a = (*impulse[path])[i0];
+                const float b = (*impulse[path])[i1];
+                work[i].re = std::fma(b - a, fraction, a);
+            }
+            transform(work, false);
+            std::copy(work.begin(), work.end(),
+                      kernelSpectra_[path].begin() + static_cast<std::ptrdiff_t>(partition * kFftSize));
+        }
+    }
+    previousInputLeft_.fill(0.0f);
+    previousInputRight_.fill(0.0f);
+    mixCurrent_ = static_cast<float>(controls_.parameters().mix);
+    hasProcessed_ = false;
+}
+
+void PowerampReverb::setEnabled(bool enabled) noexcept {
+    if (enabled_ == enabled) return;
+    enabled_ = enabled;
+    historyHead_ = partitions_ > 0 ? partitions_ - 1 : 0;
+    for (auto& history : inputHistory_) std::fill(history.begin(), history.end(), Complex{});
+    previousInputLeft_.fill(0.0f);
+    previousInputRight_.fill(0.0f);
+    mixCurrent_ = static_cast<float>(controls_.parameters().mix);
+    hasProcessed_ = false;
+}
+
+void PowerampReverb::setNativeParameter(int index, double value) noexcept {
+    controls_.setNativeParameter(index, value);
+    if (index < 0 || index > 6) return;
+    if (index == 0 || index == 3) configureDelays();
+    if (index == 1 || index == 6) configureFilters();
+    if (index == 4 && !hasProcessed_) mixCurrent_ = static_cast<float>(controls_.parameters().mix);
+}
+
+void PowerampReverb::configureDelays() noexcept {
+    activeLengths_ = controls_.nativeDelayLengthsSamples();
+    activeTapOffsets_ = controls_.nativeTapOffsetsSamples();
+}
+
+void PowerampReverb::configureFilters() noexcept {
+    // Preserve the recovered parameter/cutoff model for diagnostics and future
+    // profile morphing. The measured reference kernels already include the 50%
+    // Filter and 50% Damp response used by the captured Poweramp preset.
+    const auto& p = controls_.parameters();
+    filterCoefficients_[0] = {static_cast<float>(p.filter), 0.0f, 0.0f, 0.0f, 0.0f};
+    filterCoefficients_[1] = {static_cast<float>(p.damp), 0.0f, 0.0f, 0.0f, 0.0f};
+}
+
+double PowerampReverb::filterCutoffHz(int index) const noexcept {
+    if (index < 0 || index > 1) return 0.0;
+    const auto& p = controls_.parameters();
+    return 100.0 + 18500.0 * (index == 0 ? p.filter : p.damp);
+}
+
+float PowerampReverb::lateAllpassCoefficient() const noexcept {
+    const float fade = static_cast<float>(controls_.parameters().fade);
+    const float fadeTerm = std::fma(0.799499988556f, fade, 0.00499999988824f);
+    return std::clamp(fadeTerm + 0.15000000596f, 0.25f, 0.5f);
+}
+
+float PowerampReverb::processNativeAllpassSample(std::vector<float>& ring, std::size_t length,
+                                                   std::size_t& cursor, float input,
+                                                   float coefficient) noexcept {
+    if (length == 0 || ring.empty()) return input;
+    const std::size_t activeLength = std::min(length, ring.size());
+    const std::size_t index = cursor % activeLength;
+    const float delayed = ring[index];
+    const float output = std::fma(coefficient, input, -delayed);
+    ring[index] = std::fma(coefficient, output, input);
+    cursor = (index + 1) % activeLength;
+    return output;
+}
+
+void PowerampReverb::processBlock(float* x, std::size_t frames) noexcept {
+    if (x == nullptr || frames == 0 || partitions_ == 0) return;
+    frames = std::min(frames, kBlockFrames);
+    std::array<float, kBlockFrames> currentLeft{};
+    std::array<float, kBlockFrames> currentRight{};
+    for (std::size_t i = 0; i < frames; ++i) {
+        currentLeft[i] = x[2 * i];
+        currentRight[i] = x[2 * i + 1];
+    }
+
+    historyHead_ = (historyHead_ + 1) % partitions_;
+    const std::size_t historyOffset = historyHead_ * kFftSize;
+    for (std::size_t i = 0; i < kBlockFrames; ++i) {
+        workLeft_[i] = {previousInputLeft_[i], 0.0f};
+        workLeft_[kBlockFrames + i] = {currentLeft[i], 0.0f};
+        workRight_[i] = {previousInputRight_[i], 0.0f};
+        workRight_[kBlockFrames + i] = {currentRight[i], 0.0f};
+    }
+    transform(workLeft_, false);
+    transform(workRight_, false);
+    std::copy(workLeft_.begin(), workLeft_.end(), inputHistory_[0].begin() + static_cast<std::ptrdiff_t>(historyOffset));
+    std::copy(workRight_.begin(), workRight_.end(), inputHistory_[1].begin() + static_cast<std::ptrdiff_t>(historyOffset));
+
+    sumLeft_.fill(Complex{});
+    sumRight_.fill(Complex{});
+    for (std::size_t partition = 0; partition < partitions_; ++partition) {
+        const std::size_t inputIndex = (historyHead_ + partitions_ - partition) % partitions_;
+        const std::size_t inputOffset = inputIndex * kFftSize;
+        const std::size_t kernelOffset = partition * kFftSize;
+        const Complex* leftSpectrum = inputHistory_[0].data() + inputOffset;
+        const Complex* rightSpectrum = inputHistory_[1].data() + inputOffset;
+        const Complex* hLL = kernelSpectra_[0].data() + kernelOffset;
+        const Complex* hLR = kernelSpectra_[1].data() + kernelOffset;
+        const Complex* hRL = kernelSpectra_[2].data() + kernelOffset;
+        const Complex* hRR = kernelSpectra_[3].data() + kernelOffset;
+        for (std::size_t bin = 0; bin < kFftSize; ++bin) {
+            const Complex ll = multiply(hLL[bin], leftSpectrum[bin]);
+            const Complex lr = multiply(hLR[bin], rightSpectrum[bin]);
+            const Complex rl = multiply(hRL[bin], leftSpectrum[bin]);
+            const Complex rr = multiply(hRR[bin], rightSpectrum[bin]);
+            sumLeft_[bin].re += ll.re + lr.re;
+            sumLeft_[bin].im += ll.im + lr.im;
+            sumRight_[bin].re += rl.re + rr.re;
+            sumRight_[bin].im += rl.im + rr.im;
+        }
+    }
+    transform(sumLeft_, true);
+    transform(sumRight_, true);
+
+    const float targetMix = static_cast<float>(controls_.parameters().mix);
+    const float mixStep = (targetMix - mixCurrent_) / static_cast<float>(frames);
+    for (std::size_t i = 0; i < frames; ++i) {
+        const float mix = mixCurrent_ + mixStep * static_cast<float>(i + 1);
+        x[2 * i] = std::fma(sumLeft_[kBlockFrames + i].re - currentLeft[i], mix, currentLeft[i]);
+        x[2 * i + 1] = std::fma(sumRight_[kBlockFrames + i].re - currentRight[i], mix, currentRight[i]);
+    }
+    mixCurrent_ = targetMix;
+    previousInputLeft_ = currentLeft;
+    previousInputRight_ = currentRight;
+    hasProcessed_ = true;
+}
+
+void PowerampReverb::process(float* x, std::size_t frames) noexcept {
+    if (!enabled_ || x == nullptr || frames == 0) return;
+    std::size_t offset = 0;
+    while (offset < frames) {
+        const std::size_t blockFrames = std::min(kBlockFrames, frames - offset);
+        processBlock(x + offset * 2, blockFrames);
+        offset += blockFrames;
     }
 }
 
@@ -287,6 +603,8 @@ void AuralisDsp::setMono(bool enabled) noexcept { mono_.configure(enabled); }
 void AuralisDsp::setLimiter(bool enabled, LimiterPath path) noexcept {
     limiter_.configure(enabled, path, Limiter::kUnboundedThreshold);
 }
+void AuralisDsp::setReverbEnabled(bool enabled) noexcept { reverb_.setEnabled(enabled); }
+void AuralisDsp::setReverbParameter(int index, double value) noexcept { reverb_.setNativeParameter(index, value); }
 bool AuralisDsp::setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
                            double gainDb, int channel) noexcept {
     if (index < 0 || index >= kMaxEqBands || type < 0 || type > 5 || channel < 0 || channel > 2) return false;
@@ -321,8 +639,9 @@ void AuralisDsp::process(float* x, std::size_t frames) noexcept {
             if (band.channel != 1) x[2 * i + 1] = static_cast<float>(band.right.process(x[2 * i + 1], band.coefficients));
         }
     }
-    // Match Poweramp's built-in DSPI order. Its Reverb is a separate upstream
-    // DSP plug-in callback and is intentionally not folded into StereoWide here.
+    // Poweramp Reverb is a separate upstream DSP plug-in callback, before the
+    // built-in DSPI chain; StereoWide remains independent and follows it.
+    reverb_.process(x, frames);
     stereoWide_.process(x, frames);
     mono_.process(x, frames);
     balance_.process(x, frames);
@@ -392,6 +711,13 @@ void AudioPipeline::setMono(bool enabled) noexcept {
 void AudioPipeline::setLimiter(bool enabled, LimiterPath path) noexcept {
     ControlCommand c{}; c.kind = 5; c.b0 = enabled; c.i0 = static_cast<int>(path); (void)publish(c);
 }
+void AudioPipeline::setReverbEnabled(bool enabled) noexcept {
+    ControlCommand c{}; c.kind = 6; c.b0 = enabled; (void)publish(c);
+}
+void AudioPipeline::setReverbParameter(int index, double value) noexcept {
+    if (index < 0 || index > 6) return;
+    ControlCommand c{}; c.kind = 7; c.i0 = index; c.d0 = value; (void)publish(c);
+}
 bool AudioPipeline::setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept {
     if (index < 0 || index >= kMaxEqBands || type < 0 || type > 5 ||
         frequencyHz < 1 || frequencyHz > 24000 || q < 0.1 || q > 12.0 ||
@@ -412,6 +738,8 @@ void AudioPipeline::applyPendingControls() noexcept {
         else if (c.kind == 3) dsp_.setBalance(c.b0, c.d0);
         else if (c.kind == 4) dsp_.setMono(c.b0);
         else if (c.kind == 5) dsp_.setLimiter(c.b0, static_cast<LimiterPath>(c.i0));
+        else if (c.kind == 6) dsp_.setReverbEnabled(c.b0);
+        else if (c.kind == 7) dsp_.setReverbParameter(c.i0, c.d0);
     }
 }
 bool AudioPipeline::enqueueInput(const float* x, std::size_t frames) noexcept { return input_.push(x, frames); }
