@@ -64,6 +64,8 @@ public:
     // Recovered preference values: type 0=None, 1=Apply, 2=Apply Peak; source 0=Album, 1=Track.
     void configure(int type, int source, int defaultGainMb, int preampMb) noexcept;
     double linearGain(const ReplayGainMetadata& metadata) const noexcept;
+    // Poweramp slot-gain routine 0x320348: the applied gain in millibels, computed in Float32.
+    float appliedMillibels(const ReplayGainMetadata& metadata) const noexcept;
     static double dbToLinear(double db) noexcept;
     static double millibelsToLinear(double millibels) noexcept;
 private:

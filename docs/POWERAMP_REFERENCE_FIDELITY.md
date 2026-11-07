@@ -58,7 +58,8 @@ The configurable ceiling is recalculated from the accumulated upstream linear ga
 - Source: album / track.
 - Album source falls back to track metadata when album metadata is unavailable.
 - Track source does not fall back to album metadata.
-- Requested millibels: `tagGainDb*100 + preampMb`, or the configured default plus preamp when metadata is absent.
+- Requested millibels: `fmaf(tagGainDb, 100, preampMb)`. With no tags at all the result is the configured default gain only (no preamp). If tags exist but not for the chosen source (track source with only album tags) the result is 0 mB, not the default. Type None gives 0 mB. All of this is Float32.
+- Verified against the native slot-gain routine (2026-11-07) with `tools/reverb-oracle/replaygain_oracle.cpp`, which sets the global configuration at `0x47A250`, builds slot records, calls `0x320348` and captures the millibel value it hands to its receiver: 1,440 cases (all types, sources and availability masks, random gains, peaks including 0, negative, infinity and NaN) are bit-identical. An infinite peak caps the gain at -infinity millibels (linear gain 0), exactly as native does.
 - Apply Peak cap: `2000*log10(1/peakLinear)` millibels; applied gain is the minimum of requested and peak cap.
 - Conversion: `10^(mB/2000)`.
 

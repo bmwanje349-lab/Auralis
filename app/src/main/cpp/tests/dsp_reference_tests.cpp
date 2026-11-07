@@ -213,7 +213,9 @@ int main() {
     m.trackAvailable=false;
     check(near(rg.linearGain(m),1.0),"ReplayGain track source does not fall back to album tags");
     rg.configure(1,1,200,-100);
-    check(near(rg.linearGain(m),std::pow(10.0,1.0/20.0)),"ReplayGain missing metadata uses default gain plus preamp");
+    check(near(rg.linearGain(m),1.0),"ReplayGain track source with only album tags gives 0 mB, not the default (native 0x320348)");
+    m.albumAvailable=false;
+    check(near(rg.linearGain(m),std::pow(10.0,200.0/2000.0)),"ReplayGain with no tags uses the default gain without the preamp (native 0x320348)");
     rg.configure(0,0,0,0);
     check(near(rg.linearGain(m),1.0),"ReplayGain mode None applies unity gain");
     m.trackAvailable=true; m.trackPeakLinear=2.0;

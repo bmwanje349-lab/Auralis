@@ -123,24 +123,33 @@ void ReplayGain::configure(int type, int source, int defaultGainMb, int preampMb
 double ReplayGain::dbToLinear(double db) noexcept { return std::pow(10.0, db / 20.0); }
 double ReplayGain::millibelsToLinear(double millibels) noexcept { return std::pow(10.0, millibels / 2000.0); }
 
+// Native routine 0x320348, Float32 throughout:
+//   type 0 -> 0 mB; no tags at all -> default gain only (no preamp);
+//   album source uses album tags, falling back to track tags; track source uses track tags only
+//   (album-only tags then give 0 mB, not the default); requested = fmaf(tagGainDb, 100, preamp);
+//   type 2 caps it at 2000*log10f(1/peak) when peak > 0 (fminnm; an infinite peak caps to -inf).
+float ReplayGain::appliedMillibels(const ReplayGainMetadata& m) const noexcept {
+    if (type_ == 0) return 0.0f;
+    if (!m.albumAvailable && !m.trackAvailable) return static_cast<float>(defaultGainMb_);
+    float gainDb, peak;
+    if (source_ == 0 && m.albumAvailable) {
+        gainDb = static_cast<float>(m.albumGainDb); peak = static_cast<float>(m.albumPeakLinear);
+    } else if (m.trackAvailable) {
+        gainDb = static_cast<float>(m.trackGainDb); peak = static_cast<float>(m.trackPeakLinear);
+    } else {
+        return 0.0f;
+    }
+    float mb = std::fmaf(gainDb, 100.0f, static_cast<float>(preampMb_));
+    if (type_ == 2 && peak > 0.0f) {
+        const float cap = std::log10(1.0f / peak) * 2000.0f;
+        mb = std::fmin(cap, mb);
+    }
+    return mb;
+}
+
 double ReplayGain::linearGain(const ReplayGainMetadata& m) const noexcept {
     if (type_ == 0) return 1.0;
-    bool available = false;
-    double tagGainDb = 0.0;
-    double peak = 0.0;
-    if (source_ == 0) {
-        if (m.albumAvailable) { available = true; tagGainDb = m.albumGainDb; peak = m.albumPeakLinear; }
-        else if (m.trackAvailable) { available = true; tagGainDb = m.trackGainDb; peak = m.trackPeakLinear; }
-    } else if (m.trackAvailable) {
-        available = true; tagGainDb = m.trackGainDb; peak = m.trackPeakLinear;
-    }
-    const double requestedMb = (available ? tagGainDb * 100.0 : static_cast<double>(defaultGainMb_)) + preampMb_;
-    double appliedMb = requestedMb;
-    if (type_ == 2 && available && peak > 0.0 && std::isfinite(peak)) {
-        const double peakMb = 2000.0 * std::log10(1.0 / peak);
-        appliedMb = std::min(requestedMb, peakMb);
-    }
-    return millibelsToLinear(appliedMb);
+    return millibelsToLinear(static_cast<double>(appliedMillibels(m)));
 }
 
 void Limiter::configure(bool enabled, LimiterPath path, double configurableThreshold) noexcept {
