@@ -110,6 +110,9 @@ public:
     double sideGain() const noexcept { return static_cast<double>(sideGain_); }
 private:
     bool enabled_ = false;
+    // Poweramp's parameter handler sets DSPI flag 0x04 only when the clamped
+    // normalized width is not exactly zero, even if g = fma(2,p,1) rounds to 1.0f.
+    bool widthActive_ = false;
     float sideGain_ = 1.0f;
 };
 

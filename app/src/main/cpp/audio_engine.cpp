@@ -189,9 +189,10 @@ void StereoWide::configure(bool enabled, double sliderPercent) noexcept {
         ? 0.0f
         : std::max(0.0f, std::min(percent / 100.0f, 1.0f));
     sideGain_ = std::fma(2.0f, normalized, 1.0f);
+    widthActive_ = normalized != 0.0f;
 }
 void StereoWide::process(float* x, std::size_t frames) const noexcept {
-    if (!enabled_ || x == nullptr || sideGain_ == 1.0f) return;
+    if (!enabled_ || !widthActive_ || x == nullptr) return;
     const float g = sideGain_;
     for (std::size_t i = 0; i < frames; ++i) {
         const float l = x[2 * i], r = x[2 * i + 1];
@@ -206,7 +207,7 @@ void StereoWide::process(float* x, std::size_t frames) const noexcept {
     }
 }
 void StereoWide::process(double* x, std::size_t frames) const noexcept {
-    if (!enabled_ || x == nullptr || sideGain_ == 1.0f) return;
+    if (!enabled_ || !widthActive_ || x == nullptr) return;
     // Poweramp's double callback converts its Float32 context gain to double;
     // it does not derive a separate higher-precision slider coefficient.
     const double g = static_cast<double>(sideGain_);
