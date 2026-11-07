@@ -2,6 +2,16 @@ package com.auralis
 
 import java.nio.ByteBuffer
 
+/** ReplayGain values read from a track's tags; null gain or peak means the tag was absent. */
+internal data class ReplayGainTags(
+    val albumAvailable: Boolean = false,
+    val albumGainDb: Double? = null,
+    val albumPeakLinear: Double? = null,
+    val trackAvailable: Boolean = false,
+    val trackGainDb: Double? = null,
+    val trackPeakLinear: Double? = null
+)
+
 /** Thin JNI owner. Native queues and DSP state are created once per decoded stream. */
 internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
     private var handle: Long = nativeCreate(sampleRate)
