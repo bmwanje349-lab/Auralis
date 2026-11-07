@@ -120,62 +120,72 @@ void Limiter::setConfigurableThreshold(double threshold) noexcept {
         ? threshold : kUnboundedThreshold;
 }
 void Limiter::reset() noexcept {
-    appliedGain_ = 1.0;
-    envelopeGain_ = 1.0;
+    appliedGain_ = 1.0f;
+    envelopeGain_ = 1.0f;
 }
-double Limiter::update(double peak, double ceiling, double attackStep, double releaseStep) noexcept {
-    if (peak > ceiling && peak > 0.0) {
-        const double target = ceiling / peak;
-        if (target < envelopeGain_) envelopeGain_ = target;
-    } else {
-        envelopeGain_ = std::min(1.0, envelopeGain_ + releaseStep);
+// One native limiter step (0x21CBC0 scalar and four-frame branches), Float32 throughout:
+//   overload: target = min(target, ceiling/peak)   (no release on an overload step)
+//   otherwise: if target < 1, target = min(1, target + release)
+//   then applied gain moves toward the target: down by attack, up by release, clamped to it.
+float Limiter::update(float peak, float ceiling, float attackStep, float releaseStep) noexcept {
+    if (peak > ceiling) {
+        const float t = ceiling / peak;
+        if (t < envelopeGain_) envelopeGain_ = t;
+    } else if (envelopeGain_ < 1.0f) {
+        envelopeGain_ += releaseStep;
+        if (!(envelopeGain_ < 1.0f)) envelopeGain_ = 1.0f;
     }
     if (envelopeGain_ < appliedGain_) {
-        appliedGain_ = std::max(envelopeGain_, appliedGain_ - attackStep);
-    } else if (envelopeGain_ > appliedGain_) {
-        appliedGain_ = std::min(envelopeGain_, appliedGain_ + releaseStep);
+        appliedGain_ -= attackStep;
+        if (!(appliedGain_ >= envelopeGain_)) appliedGain_ = envelopeGain_;
+    } else if (appliedGain_ < envelopeGain_) {
+        appliedGain_ += releaseStep;
+        if (!(appliedGain_ <= envelopeGain_)) appliedGain_ = envelopeGain_;
     }
     return appliedGain_;
 }
 double Limiter::advance(double targetGain) noexcept {
-    if (!enabled_) return appliedGain_;
+    if (!enabled_) return static_cast<double>(appliedGain_);
+    const float attack = static_cast<float>(kAttackStep);
+    const float release = static_cast<float>(kReleaseStep);
     if (std::isfinite(targetGain) && targetGain < 1.0) {
-        const double target = clampd(targetGain, 0.0, 1.0);
+        const float target = static_cast<float>(clampd(targetGain, 0.0, 1.0));
         if (target < envelopeGain_) envelopeGain_ = target;
-    } else {
-        envelopeGain_ = std::min(1.0, envelopeGain_ + kReleaseStep);
+    } else if (envelopeGain_ < 1.0f) {
+        envelopeGain_ += release;
+        if (!(envelopeGain_ < 1.0f)) envelopeGain_ = 1.0f;
     }
     if (envelopeGain_ < appliedGain_) {
-        appliedGain_ = std::max(envelopeGain_, appliedGain_ - kAttackStep);
-    } else if (envelopeGain_ > appliedGain_) {
-        appliedGain_ = std::min(envelopeGain_, appliedGain_ + kReleaseStep);
+        appliedGain_ -= attack;
+        if (!(appliedGain_ >= envelopeGain_)) appliedGain_ = envelopeGain_;
+    } else if (appliedGain_ < envelopeGain_) {
+        appliedGain_ += release;
+        if (!(appliedGain_ <= envelopeGain_)) appliedGain_ = envelopeGain_;
     }
-    return appliedGain_;
+    return static_cast<double>(appliedGain_);
 }
 void Limiter::process(float* x, std::size_t frames) noexcept {
     if (!enabled_ || x == nullptr || frames == 0) return;
-    const double ceiling = path_ == LimiterPath::HardCeiling ? 1.0 : configurableThreshold_;
+    const float ceiling = path_ == LimiterPath::HardCeiling ? 1.0f : static_cast<float>(configurableThreshold_);
+    const float attack = static_cast<float>(kAttackStep), release = static_cast<float>(kReleaseStep);
+    const float vectorAttack = static_cast<float>(kVectorAttackStep), vectorRelease = static_cast<float>(kVectorReleaseStep);
     std::size_t frame = 0;
-    // Native SIMD path: one linked peak over four stereo frames, then one envelope
-    // update and one gain value for the eight interleaved samples in that group.
+    // Native SIMD path: one linked peak (FMAXNM across eight samples) over four stereo
+    // frames, then one envelope update and one gain for those eight samples.
     for (; frame + 4 <= frames; frame += 4) {
-        double peak = 0.0;
-        for (std::size_t j = 0; j < 4; ++j) {
-            peak = std::max(peak, std::abs(static_cast<double>(x[2 * (frame + j)])));
-            peak = std::max(peak, std::abs(static_cast<double>(x[2 * (frame + j) + 1])));
-        }
-        const double gain = update(peak, ceiling, kVectorAttackStep, kVectorReleaseStep);
-        const float g = static_cast<float>(gain);
-        for (std::size_t j = 0; j < 8; ++j) x[2 * frame + j] *= g;
+        float peak = std::fabs(x[2 * frame]);
+        for (std::size_t j = 1; j < 8; ++j) peak = std::fmax(peak, std::fabs(x[2 * frame + j]));
+        const float g = update(peak, ceiling, vectorAttack, vectorRelease);
+        if (g != 1.0f) for (std::size_t j = 0; j < 8; ++j) x[2 * frame + j] *= g;
     }
-    // Native scalar tail: update the linked detector and envelope once per stereo frame.
+    // Native scalar tail: linked peak and envelope update once per stereo frame.
     for (; frame < frames; ++frame) {
-        const double peak = std::max(
-            std::abs(static_cast<double>(x[2 * frame])),
-            std::abs(static_cast<double>(x[2 * frame + 1])));
-        const float gain = static_cast<float>(update(peak, ceiling, kAttackStep, kReleaseStep));
-        x[2 * frame] *= gain;
-        x[2 * frame + 1] *= gain;
+        const float peak = std::fmax(std::fabs(x[2 * frame]), std::fabs(x[2 * frame + 1]));
+        const float g = update(peak, ceiling, attack, release);
+        if (g != 1.0f) {
+            x[2 * frame] *= g;
+            x[2 * frame + 1] *= g;
+        }
     }
 }
 

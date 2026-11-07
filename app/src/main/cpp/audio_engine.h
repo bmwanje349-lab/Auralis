@@ -83,8 +83,8 @@ public:
     // Poweramp's native SIMD branch evaluates four stereo frames together, then
     // applies one gain to those four frames. The remaining 0–3 frames use scalar steps.
     void process(float* interleavedStereo, std::size_t frames) noexcept;
-    double gain() const noexcept { return appliedGain_; }
-    double targetGain() const noexcept { return envelopeGain_; }
+    double gain() const noexcept { return static_cast<double>(appliedGain_); }
+    double targetGain() const noexcept { return static_cast<double>(envelopeGain_); }
     double configurableThreshold() const noexcept { return configurableThreshold_; }
     static constexpr double kAttackStep = 1.0 / 256.0;
     static constexpr double kReleaseStep = 1.0 / 16384.0;
@@ -92,12 +92,14 @@ public:
     static constexpr double kVectorReleaseStep = 4.0 * kReleaseStep;
     static constexpr double kUnboundedThreshold = 999.999;
 private:
-    double update(double peak, double ceiling, double attackStep, double releaseStep) noexcept;
+    // Poweramp keeps the applied gain (+0xEC) and target envelope (+0xF0) as Float32 and
+    // does every limiter step in Float32, so this class does too.
+    float update(float peak, float ceiling, float attackStep, float releaseStep) noexcept;
     bool enabled_ = false;
     LimiterPath path_ = LimiterPath::HardCeiling;
     double configurableThreshold_ = 1.0;
-    double appliedGain_ = 1.0;
-    double envelopeGain_ = 1.0;
+    float appliedGain_ = 1.0f;
+    float envelopeGain_ = 1.0f;
 };
 
 class StereoWide {
