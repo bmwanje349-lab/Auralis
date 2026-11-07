@@ -21,7 +21,7 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - Apply the recovered StereoWide Mid/Side mapping and the six recovered biquad EQ families.
 - Apply native-routed Mono fold-down and signed Balance attenuation.
 - Apply the linked-stereo peak Limiter with hard-ceiling and gain-derived protection paths, scalar tail processing and four-frame vector envelope updates.
-- Keep Reverb parameter transforms and delay geometry in the reference model; the full three-mode delay recurrence is not yet enabled as a playback effect.
+- Reverb is an audible, stateful stage (UI -> service -> JNI -> native). Its late field is a captured Poweramp response at one preset (Size 0.55, Filter 0.50, Fade 0.45, Pre-delay 0.15, Mix 1.0, Pre-delay Mix 0.50, Damp 0.50). Changing those controls does not yet reshape the sound the way Poweramp does; see the fidelity doc.
 - Keep UI-to-DSP changes in a bounded lock-free control queue so the DSP worker does not take a UI mutex.
 
 ## Reference fidelity

@@ -278,3 +278,21 @@ Compressor evidence is UI/configuration only: `p000/wm0.java`, `dsp_compressor_e
 ### Current Poweramp product capabilities from the supplied reference
 
 The pasted reference's product summary lists MP3, FLAC, ALAC, APE, DSD, WavPack, Opus, WMA, TTA, MKA, TAK and tracker formats; Hi-Res PCM up to 768 kHz where hardware allows; DSD64–DSD1024; USB DAC and Bluetooth; 64-band parametric EQ and 5–32-band graphic EQ; AutoEQ; ReplayGain; limiter, Reverb and Tempo; AudioTrack, OpenSL ES, AAudio, Hi-Res, USB Exclusive and Chromecast; 64-bit processing, resampling and dither. These are Poweramp capabilities as summarized in the supplied reference, not claims that the current Auralis app already implements all of them.
+
+
+### Reverb parameter sensitivity (measured 2026-11-07)
+
+The impulse-response comparison near the top of the Reverb section (36.9% RMSE) predates the captured-response engine. At the captured preset Auralis now reproduces Poweramp's steady-state output, and the native-oracle tests pass. The capture is valid for that one preset only.
+
+`tools/reverb-oracle/grid_oracle_ir.cpp` and `grid_sweep.py` load the installed Poweramp library, capture the left-input impulse response at chosen settings (12 warm-up blocks), and report normalized RMSE against the preset's response over 16,384 frames. Changing one native parameter at a time from the preset gave:
+
+| Native index | Effect on the response |
+|---|---|
+| 0 | None in this harness at any value tested (0, 0.3, 0.55, 1) |
+| 1 (Filter) | 55% to 100% error |
+| 2 (Fade) | 19% to 69% error |
+| 3 | Reshapes the late field and tail; at 1.0 the tail past 16,384 frames is audible; error above 100% |
+| 5 (Pre-delay Mix) | 50% to 100% error |
+| 6 (Damp) | 31% to 77% error |
+
+A single captured response therefore cannot follow these controls. Matching Poweramp across settings requires porting the native per-sample recurrence: the parameter-to-filter conversion (uses `sincosf`) at `0x16847C`, the reconfiguration helper at `0x169A30`, the four serial all-pass cells, and the late tap/matrix network. That port is not done. Index 0 showing no effect is unexplained and should be checked before relying on the index-to-control mapping.
