@@ -320,8 +320,14 @@ public:
     void setReverbEnabled(bool enabled) noexcept;
     void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
+    void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
+    void setReplayGainMetadata(const ReplayGainMetadata& metadata) noexcept;
 private:
-    struct ControlCommand { int kind=0, i0=0, i1=0, i2=0, i3=0; double d0=0.0, d1=0.0; bool b0=false; };
+    struct ControlCommand {
+        int kind=0, i0=0, i1=0, i2=0, i3=0;
+        double d0=0.0, d1=0.0, d2=0.0, d3=0.0;
+        bool b0=false, b1=false;
+    };
     bool publish(const ControlCommand& command) noexcept;
     void applyPendingControls() noexcept;
     std::array<ControlCommand, 128> controls_{};

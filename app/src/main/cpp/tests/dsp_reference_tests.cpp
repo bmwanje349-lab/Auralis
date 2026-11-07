@@ -549,6 +549,40 @@ int main() {
           near(balancedRender[0],std::pow(10.0,-48.0/20.0)) && near(balancedRender[1],1.0),
           "Pipeline applies native Balance routing on the DSP thread");
 
+    AudioPipeline replayGainPipeline(48000);
+    replayGainPipeline.setStereoWide(false,0.0);
+    replayGainPipeline.setMono(false);
+    replayGainPipeline.setBalance(false,0.0);
+    replayGainPipeline.setLimiter(false,LimiterPath::HardCeiling);
+    ReplayGainMetadata pipelineTags{};
+    pipelineTags.albumAvailable=true; pipelineTags.albumGainDb=-6.0; pipelineTags.albumPeakLinear=0.8;
+    pipelineTags.trackAvailable=true; pipelineTags.trackGainDb=9.0; pipelineTags.trackPeakLinear=0.5;
+    replayGainPipeline.setReplayGain(1,0,0,0);
+    replayGainPipeline.setReplayGainMetadata(pipelineTags);
+    float replayGainInput[]={0.5f,-0.5f};
+    check(replayGainPipeline.enqueueInput(replayGainInput,1) && replayGainPipeline.processOne()==1,
+          "ReplayGain settings and track metadata traverse the native control queue");
+    float replayGainOutput[2]{};
+    const double albumLinear=std::pow(10.0,-6.0/20.0);
+    check(replayGainPipeline.dequeueOutput(replayGainOutput,1)==1 &&
+          near(replayGainOutput[0],0.5*albumLinear,1e-7) && near(replayGainOutput[1],-0.5*albumLinear,1e-7),
+          "Pipeline applies selected album ReplayGain before the EQ and spatial stages");
+
+    AudioPipeline peakCappedPipeline(48000);
+    peakCappedPipeline.setStereoWide(false,0.0);
+    peakCappedPipeline.setMono(false);
+    peakCappedPipeline.setBalance(false,0.0);
+    peakCappedPipeline.setLimiter(false,LimiterPath::HardCeiling);
+    pipelineTags.albumGainDb=9.0; pipelineTags.albumPeakLinear=0.5;
+    peakCappedPipeline.setReplayGain(2,0,0,0);
+    peakCappedPipeline.setReplayGainMetadata(pipelineTags);
+    float peakCapInput[]={0.25f,-0.25f};
+    check(peakCappedPipeline.enqueueInput(peakCapInput,1) && peakCappedPipeline.processOne()==1,
+          "ReplayGain Apply Peak control path processes through the native queue");
+    float peakCapOutput[2]{};
+    check(peakCappedPipeline.dequeueOutput(peakCapOutput,1)==1 &&
+          near(peakCapOutput[0],0.5,1e-7) && near(peakCapOutput[1],-0.5,1e-7),
+          "ReplayGain Apply Peak limits requested gain to the album peak headroom");
 
     if (failures!=0) {
         std::cerr << failures << " failed; " << passed << " passed\n";

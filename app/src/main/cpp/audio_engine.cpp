@@ -727,6 +727,17 @@ bool AudioPipeline::setEqBand(int index, bool enabled, int type, int frequencyHz
     c.d0 = q; c.d1 = gainDb;
     return publish(c);
 }
+void AudioPipeline::setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept {
+    ControlCommand c{}; c.kind = 8; c.i0 = type; c.i1 = source; c.i2 = defaultGainMb; c.i3 = preampMb;
+    (void)publish(c);
+}
+void AudioPipeline::setReplayGainMetadata(const ReplayGainMetadata& metadata) noexcept {
+    ControlCommand c{}; c.kind = 9;
+    c.b0 = metadata.albumAvailable; c.b1 = metadata.trackAvailable;
+    c.d0 = metadata.albumGainDb; c.d1 = metadata.albumPeakLinear;
+    c.d2 = metadata.trackGainDb; c.d3 = metadata.trackPeakLinear;
+    (void)publish(c);
+}
 void AudioPipeline::applyPendingControls() noexcept {
     for (;;) {
         const std::uint32_t tail = controlTail_.load(std::memory_order_relaxed);
@@ -741,6 +752,14 @@ void AudioPipeline::applyPendingControls() noexcept {
         else if (c.kind == 5) dsp_.setLimiter(c.b0, static_cast<LimiterPath>(c.i0));
         else if (c.kind == 6) dsp_.setReverbEnabled(c.b0);
         else if (c.kind == 7) dsp_.setReverbParameter(c.i0, c.d0);
+        else if (c.kind == 8) dsp_.setReplayGain(c.i0, c.i1, c.i2, c.i3);
+        else if (c.kind == 9) {
+            ReplayGainMetadata metadata{};
+            metadata.albumAvailable = c.b0; metadata.trackAvailable = c.b1;
+            metadata.albumGainDb = c.d0; metadata.albumPeakLinear = c.d1;
+            metadata.trackGainDb = c.d2; metadata.trackPeakLinear = c.d3;
+            dsp_.setReplayGainMetadata(metadata);
+        }
     }
 }
 bool AudioPipeline::enqueueInput(const float* x, std::size_t frames) noexcept { return input_.push(x, frames); }

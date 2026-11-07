@@ -24,6 +24,12 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
     }
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int, q: Double, gainDb: Double, channel: Int = 0): Boolean =
         nativeSetEqBand(handle, index, enabled, type, frequencyHz, q, gainDb, channel)
+    fun setReplayGain(type: Int, source: Int, defaultGainMb: Int, preampMb: Int) =
+        nativeSetReplayGain(handle, type, source, defaultGainMb, preampMb)
+    fun setReplayGainMetadata(tags: ReplayGainTags) = nativeSetReplayGainMetadata(
+        handle, tags.albumAvailable, tags.albumGainDb ?: 0.0, tags.albumPeakLinear ?: 0.0,
+        tags.trackAvailable, tags.trackGainDb ?: 0.0, tags.trackPeakLinear ?: 0.0
+    )
 
     override fun close() {
         val old = handle
@@ -49,5 +55,10 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
         @JvmStatic private external fun nativeSetReverbParameter(handle: Long, index: Int, value: Double)
         @JvmStatic private external fun nativeSetEqBand(handle: Long, index: Int, enabled: Boolean, type: Int,
                                                         frequencyHz: Int, q: Double, gainDb: Double, channel: Int): Boolean
+        @JvmStatic private external fun nativeSetReplayGain(handle: Long, type: Int, source: Int,
+                                                            defaultGainMb: Int, preampMb: Int)
+        @JvmStatic private external fun nativeSetReplayGainMetadata(handle: Long,
+            albumAvailable: Boolean, albumGainDb: Double, albumPeakLinear: Double,
+            trackAvailable: Boolean, trackGainDb: Double, trackPeakLinear: Double)
     }
 }

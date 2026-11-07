@@ -77,3 +77,31 @@ Java_com_auralis_NativeAudioEngine_nativeSetReverbParameter(JNIEnv*, jclass, jlo
     auto* p = reinterpret_cast<AudioPipeline*>(handle);
     if (p && index >= 0 && index <= 6) p->setReverbParameter(index, value);
 }
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetReplayGain(JNIEnv*, jclass, jlong handle,
+                                                        jint type, jint source,
+                                                        jint defaultGainMb, jint preampMb) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (p) p->setReplayGain(type, source, defaultGainMb, preampMb);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetReplayGainMetadata(JNIEnv*, jclass, jlong handle,
+                                                                 jboolean albumAvailable,
+                                                                 jdouble albumGainDb,
+                                                                 jdouble albumPeakLinear,
+                                                                 jboolean trackAvailable,
+                                                                 jdouble trackGainDb,
+                                                                 jdouble trackPeakLinear) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (!p) return;
+    auralis::ReplayGainMetadata metadata{};
+    metadata.albumAvailable = albumAvailable == JNI_TRUE;
+    metadata.trackAvailable = trackAvailable == JNI_TRUE;
+    metadata.albumGainDb = albumGainDb;
+    metadata.albumPeakLinear = albumPeakLinear;
+    metadata.trackGainDb = trackGainDb;
+    metadata.trackPeakLinear = trackPeakLinear;
+    p->setReplayGainMetadata(metadata);
+}
