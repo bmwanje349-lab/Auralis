@@ -164,7 +164,8 @@ int main() {
     // EQ: calculate each supplied coefficient family and compare normalized coefficients.
     constexpr double pi=3.1415926535897932384626433832795;
     const int sr=48000, hz=1000;
-    const double q=0.707, gain=6.0;
+    // The native kernel receives Q and gain as Float32, so the reference equations use the Float32-rounded Q.
+    const double q=static_cast<double>(0.707f), gain=6.0;
     const double w=2.0*pi*hz/sr, c=std::cos(w), s=std::sin(w);
     const double alpha=s/(2.0*q), A=std::pow(10.0,gain/40.0), beta=2.0*std::sqrt(A)*alpha;
     BiquadCoefficients coeff{}, expected{};

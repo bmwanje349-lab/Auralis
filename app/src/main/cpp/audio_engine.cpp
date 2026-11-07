@@ -23,44 +23,77 @@ bool calculateBiquad(int sampleRate, int frequencyHz, EqFilterType type,
                      double q, double gainDb, BiquadCoefficients& out) noexcept {
     if (sampleRate <= 0 || frequencyHz < 1 || frequencyHz > 24000 ||
         q < 0.1 || q > 12.0 || gainDb < -15.0 || gainDb > 15.0) return false;
-    const double w = 2.0 * kPi * static_cast<double>(frequencyHz) / static_cast<double>(sampleRate);
+    // Native kernel 0x306FD8 operation order, in double precision. Q and gain arrive as Float32.
+    const double qd = static_cast<double>(static_cast<float>(q));
+    const double gd = static_cast<double>(static_cast<float>(gainDb));
+    // The kernel clamps the frequency to [0, sampleRate/2 - 1].
+    const int nyquist = sampleRate / 2;
+    const int f = frequencyHz < nyquist ? frequencyHz : nyquist - 1;
+    const double w = static_cast<double>(f) * (2.0 * kPi) / static_cast<double>(sampleRate);
     const double c = std::cos(w);
     const double s = std::sin(w);
-    const double alpha = s / (2.0 * q);
-    const double A = std::pow(10.0, gainDb / 40.0);
-    const double beta = 2.0 * std::sqrt(A) * alpha;
+    const double alpha = s / (qd + qd);
     double b0, b1, b2, a0, a1, a2;
     switch (type) {
-        case EqFilterType::LowPass:
-            b0 = (1.0 - c) / 2.0; b1 = 1.0 - c; b2 = (1.0 - c) / 2.0;
-            a0 = 1.0 + alpha; a1 = -2.0 * c; a2 = 1.0 - alpha; break;
-        case EqFilterType::HighPass:
-            b0 = (1.0 + c) / 2.0; b1 = -(1.0 + c); b2 = (1.0 + c) / 2.0;
-            a0 = 1.0 + alpha; a1 = -2.0 * c; a2 = 1.0 - alpha; break;
+        case EqFilterType::LowPass: {
+            const double t = 1.0 - c;
+            b0 = t * 0.5; b1 = t; b2 = b0;
+            a0 = alpha + 1.0; a1 = c * -2.0; a2 = 1.0 - alpha; break;
+        }
+        case EqFilterType::HighPass: {
+            const double t = c + 1.0;
+            b0 = t * 0.5; b1 = -t; b2 = b0;
+            a0 = alpha + 1.0; a1 = c * -2.0; a2 = 1.0 - alpha; break;
+        }
         case EqFilterType::BandPass:
             b0 = alpha; b1 = 0.0; b2 = -alpha;
-            a0 = 1.0 + alpha; a1 = -2.0 * c; a2 = 1.0 - alpha; break;
-        case EqFilterType::Peaking:
-            b0 = 1.0 + alpha * A; b1 = -2.0 * c; b2 = 1.0 - alpha * A;
-            a0 = 1.0 + alpha / A; a1 = -2.0 * c; a2 = 1.0 - alpha / A; break;
-        case EqFilterType::LowShelf:
-            b0 = A * ((A + 1.0) - (A - 1.0) * c + beta);
-            b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * c);
-            b2 = A * ((A + 1.0) - (A - 1.0) * c - beta);
-            a0 = (A + 1.0) + (A - 1.0) * c + beta;
-            a1 = -2.0 * ((A - 1.0) + (A + 1.0) * c);
-            a2 = (A + 1.0) + (A - 1.0) * c - beta; break;
-        case EqFilterType::HighShelf:
-            b0 = A * ((A + 1.0) + (A - 1.0) * c + beta);
-            b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * c);
-            b2 = A * ((A + 1.0) + (A - 1.0) * c - beta);
-            a0 = (A + 1.0) - (A - 1.0) * c + beta;
-            a1 = 2.0 * ((A - 1.0) - (A + 1.0) * c);
-            a2 = (A + 1.0) - (A - 1.0) * c - beta; break;
+            a0 = alpha + 1.0; a1 = c * -2.0; a2 = 1.0 - alpha; break;
+        case EqFilterType::Peaking: {
+            const double A = std::pow(10.0, gd * 0.025);
+            const double aA = alpha * A;
+            const double aOverA = alpha / A;
+            b0 = aA + 1.0; b1 = c * -2.0; b2 = 1.0 - aA;
+            a0 = aOverA + 1.0; a1 = b1; a2 = 1.0 - aOverA; break;
+        }
+        case EqFilterType::LowShelf: {
+            const double A = std::pow(10.0, gd * 0.025);
+            const double sqrtA = std::sqrt(A);
+            const double Ap1 = A + 1.0, Am1 = A + -1.0;
+            const double Am1c = Am1 * c;
+            const double d5 = Ap1 - Am1c;
+            const double beta = sqrtA * (alpha + alpha);
+            b0 = (d5 + beta) * A;
+            const double Ap1c = Ap1 * c;
+            const double t1 = Am1 - Ap1c;
+            b1 = A * (t1 + t1);
+            b2 = (d5 - beta) * A;
+            const double e5 = Am1c + Ap1;
+            a0 = e5 + beta;
+            a1 = (Ap1c + Am1) * -2.0;
+            a2 = e5 - beta; break;
+        }
+        case EqFilterType::HighShelf: {
+            const double A = std::pow(10.0, gd * 0.025);
+            const double sqrtA = std::sqrt(A);
+            const double Ap1 = A + 1.0, Am1 = A + -1.0;
+            const double Am1c = Am1 * c;
+            const double d5 = Am1c + Ap1;
+            const double beta = sqrtA * (alpha + alpha);
+            b0 = (d5 + beta) * A;
+            const double Ap1c = Ap1 * c;
+            b1 = (A * -2.0) * (Ap1c + Am1);
+            b2 = (d5 - beta) * A;
+            const double e5 = Ap1 - Am1c;
+            a0 = e5 + beta;
+            const double t3 = Am1 - Ap1c;
+            a1 = t3 + t3;
+            a2 = e5 - beta; break;
+        }
         default: return false;
     }
     if (!std::isfinite(a0) || std::abs(a0) < std::numeric_limits<double>::epsilon()) return false;
-    out = {b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0};
+    const double inv = 1.0 / a0;  // the kernel multiplies by the reciprocal instead of dividing
+    out = {b0 * inv, b1 * inv, b2 * inv, a1 * inv, a2 * inv};
     return true;
 }
 
