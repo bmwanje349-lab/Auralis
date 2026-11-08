@@ -582,8 +582,11 @@ float PowerampReverb::processNativeAllpassSample(std::vector<float>& ring, std::
     if (length == 0 || ring.empty()) return input;
     const std::size_t activeLength = std::min(length, ring.size());
     const std::size_t index = cursor % activeLength;
+    // Poweramp's early (input diffusion) all-pass, measured against the native reverb
+    // (tools/reverb-oracle/analyze_chain.py, all four stages, every write within 6e-9):
+    //   y = delayed - c*input ; stored = input + c*y
     const float delayed = ring[index];
-    const float output = std::fma(coefficient, input, -delayed);
+    const float output = std::fma(-coefficient, input, delayed);
     ring[index] = std::fma(coefficient, output, input);
     cursor = (index + 1) % activeLength;
     return output;

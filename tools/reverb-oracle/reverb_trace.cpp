@@ -57,16 +57,30 @@ int main(int argc, char** argv) {
       Buf bf; bf.off = off; bf.p = (const float*)v; bf.n = std::min<size_t>((rg.hi - v) / 4, 16384);
       bf.prev.assign(bf.p, bf.p + bf.n); bufs.push_back(std::move(bf)); seen.push_back(v); break; }
   }
+  // ABS=1: report each changed float once, at its absolute index (floats from the lowest buffer pointer),
+  // so overlapping views of the same arena are not listed repeatedly.
+  const bool absMode = getenv("ABS") != nullptr;
+  uintptr_t minBase = ~(uintptr_t)0;
+  for (auto& bf : bufs) minBase = std::min(minBase, (uintptr_t)bf.p);
   for (unsigned n = 0; n < FRAMES; n++) {
     float fr[2] = {0.f, 0.f};
     if (n == 0) fr[right ? 1 : 0] = 1.f;
     run(c, fr, 1);
     printf("frame %u out=(% .6g, % .6g)\n", n, fr[0], fr[1]);
+    std::vector<long> reported;
     for (auto& bf : bufs) {
       for (size_t i = 0; i < bf.n; i++) {
         const float v = bf.p[i];
         if (memcmp(&v, &bf.prev[i], 4) != 0) {
-          printf("   buf@0x%03x[%zu] %.7g -> %.7g\n", bf.off, i, bf.prev[i], v);
+          if (absMode) {
+            const long idx = (long)(((uintptr_t)(bf.p + i) - minBase) / 4);
+            if (std::find(reported.begin(), reported.end(), idx) == reported.end()) {
+              reported.push_back(idx);
+              printf("   A[%ld] %.9g -> %.9g\n", idx, bf.prev[i], v);
+            }
+          } else {
+            printf("   buf@0x%03x[%zu] %.7g -> %.7g\n", bf.off, i, bf.prev[i], v);
+          }
           bf.prev[i] = v;
         }
       }

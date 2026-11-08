@@ -330,12 +330,27 @@ int main() {
     std::size_t nativeAllpassCursor = 0;
     const float nativeAllpassFirst = PowerampReverb::processNativeAllpassSample(
         nativeAllpassProbe, 1, nativeAllpassCursor, 1.0f, 0.75f);
-    check(near(nativeAllpassFirst,0.75) && near(nativeAllpassProbe[0],1.5625),
-          "Reverb early all-pass uses native coefficient*input-minus-delay and fused feedback write");
+    check(near(nativeAllpassFirst,-0.75) && near(nativeAllpassProbe[0],0.4375),
+          "Reverb early all-pass is delay-minus-coefficient*input with stored input+coefficient*output (measured against native)");
     const float nativeAllpassSecond = PowerampReverb::processNativeAllpassSample(
         nativeAllpassProbe, 1, nativeAllpassCursor, 0.0f, 0.75f);
-    check(near(nativeAllpassSecond,-1.5625) && near(nativeAllpassProbe[0],-1.171875),
-          "Reverb all-pass feedback polarity matches Poweramp on a wrapped one-sample delay");
+    check(near(nativeAllpassSecond,0.4375) && near(nativeAllpassProbe[0],0.328125),
+          "Reverb all-pass recirculates the stored value on a wrapped one-sample delay");
+    {
+        // First-sample stored values of the four serial input all-pass stages for a unit input,
+        // as written by the native reverb (ratios to the input: 0.4375, -0.328125, 0.342773, -0.214233).
+        const float gains[4] = {0.75f, 0.75f, 0.625f, 0.625f};
+        const double expected[4] = {0.4375, -0.328125, 0.342773438, -0.214233398};
+        float value = 1.0f;
+        bool chainMatches = true;
+        for (int stage = 0; stage < 4; ++stage) {
+            std::vector<float> ring(1, 0.0f);
+            std::size_t cursor = 0;
+            value = PowerampReverb::processNativeAllpassSample(ring, 1, cursor, value, gains[stage]);
+            if (!near(ring[0], expected[stage], 1e-6)) chainMatches = false;
+        }
+        check(chainMatches, "Reverb four-stage input all-pass chain reproduces the native first-sample stored values");
+    }
     PowerampReverb reverbRuntime(48000);
     float reverbBypass[] = {0.25f, -0.5f};
     reverbRuntime.process(reverbBypass, 1);

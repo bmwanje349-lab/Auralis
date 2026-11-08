@@ -102,7 +102,7 @@ The Android player uses separate decoder, DSP and output worker threads. The nat
 
 ## Deliberate non-claims
 
-The supplied record does not contain enough information to reproduce the full proprietary engine exactly: the complete Reverb packed-tap stereo recurrence (still not ported in Auralis), time-stretch implementation, exact SoX/P2D resampler kernel, dither noise-shaping filters, compressor algorithm, complete DSD engine, ReplayGain tag parser, full output driver selection logic, and exact complete DSP stage ordering are not specified. Auralis does not replace those with unrelated DSP while calling them equivalent.
+The supplied record does not contain enough information to reproduce the full proprietary engine exactly: the complete Reverb packed-tap stereo recurrence (still not ported in Auralis), time-stretch implementation, exact SoX/P2D resampler kernel, dither noise-shaping filters, compressor algorithm, complete DSD engine, full output driver selection logic, and exact complete DSP stage ordering are not specified. Auralis does not replace those with unrelated DSP while calling them equivalent.
 
 ## Appendix A — Complete recovered binary reference data
 
@@ -320,6 +320,15 @@ Pre-delay onset (confirmed 2026-11-08 at 44.1 and 48 kHz with `predelay_onset.py
 Update flags (resolves the earlier "index 0 does nothing" observation): the setter writes update flag 2 for Size (index 0) and Pre-delay (index 3) and flag 1 for every other index, so the **last** setter called decides which kind of update is pending. A harness that sets all seven values in order 0 to 6 ends with flag 1 and never applies a Size change. With Size set last (`SIZELAST=1` in `grid_oracle_ir`), Size 0, 0.3, 0.8 and 1.0 change the 16,384-frame response by 114%, 114%, 107% and 104% relative to the default. In the real app one slider moves at a time, so each change carries its own flag. Any further measurement of Size must set it last.
 
 Structure seen in the traces: after a unit impulse the filtered input is written into one long delay buffer at four fixed offsets (gains about 1, 1, 0.6, 0.6; spacings 89, 60 and 69 ms), plus further buffers that first change at the late-network onset; the four all-pass buffers (230, 172, 609 and 446 samples) first receive data at that same onset. The wiring between them has not been identified.
+
+### Reverb input all-pass chain (verified 2026-11-08)
+
+`reverb_trace` with `ABS=1` reports each changed float once at its absolute position in the reverb's memory arena (several of the context's "buffers" are overlapping views of one arena, and every ring write is stored twice, at `p` and `p + N`, so reads never wrap). With that, `tools/reverb-oracle/analyze_chain.py` checks the first four late-network stages against the native trace for 1,700 frames at the default settings:
+
+- Each stage is a Schroeder all-pass: `y = delayed - c * input`, and the value stored in its delay line is `input + c * y`. Stage gains are 0.75, 0.75, 0.625, 0.625 and the delays are 230, 172, 609 and 446 samples at 48 kHz (4.8, 3.6, 12.7, 9.3 ms); the output of each stage is the input of the next.
+- With a unit impulse the first stored values are 0.4375, -0.328125, 0.342773 and -0.214233 times the stage-1 input, and the model reproduces every write the native routine makes (157, 216, 217 and 216 writes compared) to within 6.1e-9, which is Float32 precision.
+- Correction: `PowerampReverb::processNativeAllpassSample` previously used `y = c * input - delayed` and stored `input + c * y`. That is not an all-pass (its first stored value is 1.5625 instead of 0.4375) and does not match the native writes. It is now `y = delayed - c * input` with the same stored form, and its unit test and a new four-stage test use the measured values. The function is used only by tests; the audible reverb is still the captured-response engine.
+- The measured structure after the chain is not yet understood: the fixed slot that follows stage 4 (arena index 2496) starts as `0.9375 * y4` and `0.25 * previous + 0.9375 * y4` for its first three values and then departs from any one- or two-tap filter of the stage-4 output, and further state slots exist at arena indices 11040, 46272 and 60672. The late network is therefore not the plain Dattorro plate that the all-pass stages resemble (the delay periods recorded above include eight Size-scaled periods).
 
 ### Reverb parameter sensitivity (measured 2026-11-07)
 
