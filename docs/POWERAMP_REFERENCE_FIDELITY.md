@@ -69,7 +69,7 @@ The player currently delegates decoding to Android's media stack; it does not ye
 
 Auralis's Reverb control model follows the native setter's parameter contract. Inputs are clamped to `[0,1]` using Float32 semantics; Size maps to `0.01 + 0.99 × UI`; Damp is stored as `1 - UI`; Filter, Fade, Pre-Delay, Mix, and Pre-Delay Mix are identity values. The eighth native setter slot is flag-only and does not store a p8 field. The app exposes seven controls and persists their values across track sessions.
 
-The native allocator at `0x16BF40` creates 15 ring buffers in four aligned-capacity groups: 4 × 12.6953125 ms, 6 × 88.8671875 ms, 4 × 149.4140625 ms, and 1 × 199.21875 ms. Capacity allocation uses Float32 `Fs × seconds` and ARM `FCVTAS` rounding; the backing allocations use aligned storage and padded strides. These are capacities, not the active tap geometry. The first four active all-pass delays are fixed at 4.8, 3.6, 12.7, and 9.3 ms, with feedback gains `0.75, 0.75, 0.625, 0.625`. Eight further active periods scale with Size (`20, 60, 30, 89, 150, 120, 140, 110` ms); two additional tail periods are fixed at 89 and 69 ms. **Pre-delay is not a millisecond value**: the active input-ring length is `FCVTZS(Float32(PreDelay × 200))`, a 0–200-sample control independent of sample rate, then bounded by its sample-rate-dependent allocated capacity. For example, UI 15% gives 30 active samples at 44.1, 48, and 96 kHz.
+The native allocator at `0x16BF40` creates 15 ring buffers in four aligned-capacity groups: 4 × 12.6953125 ms, 6 × 88.8671875 ms, 4 × 149.4140625 ms, and 1 × 199.21875 ms. Capacity allocation uses Float32 `Fs × seconds` and ARM `FCVTAS` rounding; the backing allocations use aligned storage and padded strides. These are capacities, not the active tap geometry. The first four active all-pass delays are fixed at 4.8, 3.6, 12.7, and 9.3 ms, with feedback gains `0.75, 0.75, 0.625, 0.625`. Eight further active periods scale with Size (`20, 60, 30, 89, 150, 120, 140, 110` ms); two additional tail periods are fixed at 89 and 69 ms. **Pre-delay is a time, 0 to 200 ms** (corrected 2026-11-08; an earlier version of this note called it a 0 to 200 sample count). Measured on the installed native reverb at 44.1, 48 and 96 kHz, the late network starts at frame `floor(PreDelay × 200 × Fs / 1000)`: UI 15% is 30 ms, which is 1323, 1440 and 2880 frames, and UI 100% is 200 ms (8820 and 9600 frames at 44.1 and 48 kHz). The value is not clamped to the 199.2 ms allocation size.
 
 The `0x169A30` reconfiguration helper also computes 24 auxiliary tap offsets. Four Size-scaled late-ring triplets use Float32 ratios `{.067,.011,.121}`, `{.036,.089,0}`, `{.0089,.099,0}`, and `{.067,.0041,0}` multiplied by `Fs × Size`, truncated with `FCVTZS`, and clamped to each ring's active length. Two six-tap packed banks use fixed sample-rate ratios `{.0199,.0219,.0354,.0389,.0414,.0692}` and `{.0099,.011,.0182,.0189,.0213,.0431}`; these do not scale with Size. Auralis's control model now calculates the 15 active lengths and all 24 offsets with the recovered Float32/truncation/clamping behavior. Native-oracle tests cover the full 24-value map at 48 kHz and 44.1 kHz.
 
@@ -77,7 +77,7 @@ The active audible Float32 sample processor is the path at `0x16847C`; its per-b
 
 The later stereo field is not a bank of six independent delays. Poweramp reads multiple tap offsets across the paired late delay buffers and combines them with lane reversal and a weighted stereo SIMD feedback matrix, then writes back into packed stereo buffers. Auralis now has the native delay and tap geometry as a verified control model, but its current audible late field is still a captured-profile MIMO convolution rather than the native per-sample feedback recurrence. The tap map is not yet driving the convolution engine. This is deliberately not claimed as full Poweramp DSP parity. The auxiliary callback at `0x16C3A0` and its `+0xD44` analysis-mode branches process 512-sample visualization/analysis blocks; they are not the audible Reverb kernel.
 
-A direct 48 kHz Float32 impulse comparison was run with matching default parameter values and 8,192 stereo frames. Poweramp measured left/right energies `1.08809689 / 0.06436194` and peak `0.99906212`; the current Auralis prototype measured `1.00176166 / 0.00135193` and peak `1.0`. Normalized sample RMSE was approximately `0.36934` (36.9%). The small Auralis right-channel tail demonstrates that its current late stereo network does not match Poweramp. The setter, active delay timing, all auxiliary tap positions, and selected transition/update behavior are recovered; the late packed-tap/matrix recurrence and its exact per-sample feedback state remain unfinished. Do not claim full Reverb parity until that matrix is ported and its impulse/block output is shown to converge against the native oracle.
+**Historical measurement, superseded by the captured-response engine (see "Reverb parameter sensitivity" below):** a direct 48 kHz Float32 impulse comparison was run with matching default parameter values and 8,192 stereo frames. Poweramp measured left/right energies `1.08809689 / 0.06436194` and peak `0.99906212`; the current Auralis prototype measured `1.00176166 / 0.00135193` and peak `1.0`. Normalized sample RMSE was approximately `0.36934` (36.9%). The small Auralis right-channel tail demonstrates that its current late stereo network does not match Poweramp. The setter, active delay timing, all auxiliary tap positions, and selected transition/update behavior are recovered; the late packed-tap/matrix recurrence and its exact per-sample feedback state remain unfinished. Do not claim full Reverb parity until that matrix is ported and its impulse/block output is shown to converge against the native oracle.
 
 ## Retained recovered settings and constants
 
@@ -307,7 +307,7 @@ Not yet done: matching the arithmetic bit for bit, the sample-rate dependence of
 
 | Native index | First differing buffer write | First differing output | Reading |
 |---|---|---|---|
-| 0 | none | none | No effect in this routine (see below) |
+| 0 | none (Size was set first, so its update flag was overwritten) | none | Size: only acts when it is the last setter, see "Update flags" below |
 | 1 | frame 0, input buffer | frame 0 | Filter: the input low-pass (cutoff 100 + 18,500 x value Hz) |
 | 2 | frame 1441 to 1443, late network | same frame | Fade: acts only inside the late network |
 | 3 | frame 0, input buffer position | 960 at 0.1, 1440 at default 0.15 | Pre-delay: sets when the late network starts receiving data |
@@ -315,9 +315,9 @@ Not yet done: matching the arithmetic bit for bit, the sample-rate dependence of
 | 5 | none | frame 0 | Output stage only (Pre-delay Mix) |
 | 6 | frame 1441, late network | same frame | Damp: acts inside the late network, one frame after its first input |
 
-Pre-delay onset: the late network's first write lands at frame `9600 x value` at 48 kHz (960 at 0.10, 1440 at 0.15), which is 30 ms at the default and `value x 200 ms` generally. The earlier note in this file says the pre-delay "is not a millisecond value" and counts 0 to 200 samples; the measured onset, in units of 48 samples per count at 48 kHz, suggests the count is milliseconds at the sample rate. That has to be confirmed at 44.1 kHz before the earlier note is changed.
+Pre-delay onset (confirmed 2026-11-08 at 44.1 and 48 kHz with `predelay_onset.py`, 11 values per rate): the late network's first write lands at frame `floor(PreDelay × 200 × Fs / 1000)`, i.e. a continuous time of `PreDelay × 200 ms`, not an integer number of milliseconds (UI 0.1499 gives 1322 frames at 44.1 kHz and 1439 at 48 kHz, one frame short of 0.15). The earlier statement in this file that Pre-delay is a 0 to 200 sample count was wrong and has been corrected above.
 
-Open item: native index 0 (the control the setter maps to Size) changes nothing, either in buffer writes over 2,200 frames or in the 32,768-frame impulse response, and calling the flag-only slot 7 afterwards (`FLAG7=1` in `grid_oracle_ir`) does not change that. Either Size is applied through a path this harness does not reach (the doc names a second processing core at `0x168940`) or index 0 is not Size. Do not rely on the index-to-control mapping for index 0.
+Update flags (resolves the earlier "index 0 does nothing" observation): the setter writes update flag 2 for Size (index 0) and Pre-delay (index 3) and flag 1 for every other index, so the **last** setter called decides which kind of update is pending. A harness that sets all seven values in order 0 to 6 ends with flag 1 and never applies a Size change. With Size set last (`SIZELAST=1` in `grid_oracle_ir`), Size 0, 0.3, 0.8 and 1.0 change the 16,384-frame response by 114%, 114%, 107% and 104% relative to the default. In the real app one slider moves at a time, so each change carries its own flag. Any further measurement of Size must set it last.
 
 Structure seen in the traces: after a unit impulse the filtered input is written into one long delay buffer at four fixed offsets (gains about 1, 1, 0.6, 0.6; spacings 89, 60 and 69 ms), plus further buffers that first change at the late-network onset; the four all-pass buffers (230, 172, 609 and 446 samples) first receive data at that same onset. The wiring between them has not been identified.
 
@@ -329,10 +329,10 @@ The impulse-response comparison near the top of the Reverb section (36.9% RMSE) 
 
 | Native index | Effect on the response |
 |---|---|
-| 0 | None in this harness at any value tested (0, 0.3, 0.55, 1) |
+| 0 (Size) | None when Size is set before the other controls (harness artifact, see "Update flags" below). Set last, Size changes the response by 104% to 114% |
 | 1 (Filter) | 55% to 100% error |
 | 2 (Fade) | 19% to 69% error |
-| 3 | Reshapes the late field and tail; at 1.0 the tail past 16,384 frames is audible; error above 100% |
+| 3 (Pre-delay) | Moves the start of the late network and so the whole tail; error above 100% |
 | 5 (Pre-delay Mix) | 50% to 100% error |
 | 6 (Damp) | 31% to 77% error |
 

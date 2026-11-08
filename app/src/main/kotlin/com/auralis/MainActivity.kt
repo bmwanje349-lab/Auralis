@@ -153,7 +153,7 @@ class MainActivity : Activity() {
                         label.text = when (index) {
                             1 -> "Filter: $value% · cutoff ${100 + 185 * value} Hz"
                             2 -> "Fade: $value%"
-                            3 -> "Pre-Delay: $value% · ${"%.1f".format(value * 1.9921875)} ms"
+                            3 -> "Pre-Delay: $value% · ${value * 2} ms"
                             6 -> "Damp: $value% · cutoff ${18600 - 185 * value} Hz"
                             else -> "${reverbNames[index]}: $value%"
                         }

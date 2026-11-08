@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
   auto set = (Set)(b + 0x16bc00);
   auto run = (Run)(b + 0x167d20);
   unsigned char* c = (unsigned char*)calloc(1, 0x4c8);
-  init(c, 48000);
+  init(c, getenv("RATE") ? (uint32_t)atoi(getenv("RATE")) : 48000u);
   for (unsigned i = 0; i < 7; i++) set(c, i, strtof(argv[2 + i], nullptr));
   const bool right = argc > 9 && std::string(argv[9]) == "right";
   float x[2048];
@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
     if (v < 0x10000 || (v & 3)) continue;
     if (v >= (uintptr_t)c && v < (uintptr_t)c + 0x4c8) continue;
     if (std::find(seen.begin(), seen.end(), v) != seen.end()) continue;
+    // ONLYOFF=<ctx offset> watches a single buffer (fast mode for long runs).
+    if (getenv("ONLYOFF") && off != (unsigned)strtoul(getenv("ONLYOFF"), nullptr, 0)) continue;
     for (auto& rg : ranges) if (v >= rg.lo && v < rg.hi) {
       Buf bf; bf.off = off; bf.p = (const float*)v; bf.n = std::min<size_t>((rg.hi - v) / 4, 16384);
       bf.prev.assign(bf.p, bf.p + bf.n); bufs.push_back(std::move(bf)); seen.push_back(v); break; }

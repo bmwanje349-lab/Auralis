@@ -272,8 +272,22 @@ int main() {
     check(reverbTiming.nativeDelayLengthsSamples()==std::array<int,15>{230,172,609,446,960,2880,1440,4272,0,7200,5760,6720,5280,4272,3312},
           "Reverb eight Size-dependent and two fixed tail delays match native 48 kHz Float32 timing constants");
     reverbTiming.setNativeParameter(3,0.5);
-    check(reverbTiming.nativeDelayLengthsSamples()[8]==100,
-          "Reverb Pre-Delay uses the native 200-sample control range independent of sample rate");
+    check(reverbTiming.nativeDelayLengthsSamples()[8]==4800,
+          "Reverb Pre-Delay is a 0..200 ms time: 50 % is 100 ms = 4800 samples at 48 kHz");
+    {
+        // Late-network onset frames measured on the installed native reverb (predelay_onset.py).
+        struct Onset { int rate; double value; int frames; };
+        const Onset onsets[] = {{44100,0.15,1323},{44100,0.1499,1322},{44100,0.5,4410},{44100,1.0,8820},
+                                {48000,0.005,48},{48000,0.0999,959},{48000,0.15,1440},{48000,0.333,3196},
+                                {48000,0.9999,9599},{48000,1.0,9600}};
+        bool allMatch = true;
+        for (const Onset& o : onsets) {
+            ReverbControlModel model(o.rate);
+            model.setNativeParameter(3, o.value);
+            if (model.nativeDelayLengthsSamples()[8] != o.frames) allMatch = false;
+        }
+        check(allMatch, "Reverb Pre-Delay length matches the measured native late-network onset at 44.1 and 48 kHz");
+    }
     ReverbControlModel reverbTapTiming(48000);
     reverbTapTiming.setNativeParameter(0,0.55);
     const std::array<int,24> expectedNativeTaps48k{{

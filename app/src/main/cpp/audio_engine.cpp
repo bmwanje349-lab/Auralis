@@ -362,12 +362,12 @@ std::array<int, 15> ReverbControlModel::nativeDelayLengthsSamples() const noexce
     // 89 ms and 69 ms; they do not scale with Size.
     lengths[13] = static_cast<int>(rate * kNativeFixedTailDelaySeconds[0]);
     lengths[14] = static_cast<int>(rate * kNativeFixedTailDelaySeconds[1]);
-    // Native +0x128 ring active length is FCVTZS(PreDelay * 200.0f). It is
-    // a 0..200-sample control, not 0..200 ms; only the allocated capacity at
-    // +0x138 scales with the sample rate.
-    const float predelayTarget = preDelay * 200.0f;
-    const float predelayCapacity = static_cast<float>(nativeBufferLengthsSamples()[3]);
-    lengths[8] = static_cast<int>(std::min(predelayTarget, predelayCapacity));
+    // Pre-delay is a time, 0..200 ms. Measured against the installed native reverb at 44.1, 48
+    // and 96 kHz (tools/reverb-oracle/predelay_onset.py): the late network starts at frame
+    // floor(PreDelay * 200 * Fs / 1000) for every value tried, e.g. 1323 / 1440 / 2880 frames
+    // at the default 15 % and 8820 / 9600 at 100 %. The value is not clamped to the 199.2 ms
+    // allocation size.
+    lengths[8] = static_cast<int>(preDelay * 200.0f * rate / 1000.0f);
     return lengths;
 }
 

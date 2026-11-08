@@ -30,7 +30,14 @@ int main(int argc, char** argv) {
   auto run = (Run)(b + 0x167d20);
   void* c = calloc(1, 0x4c8);
   init(c, 48000);
-  for (unsigned i = 0; i < 7; i++) set(c, i, strtof(argv[2 + i], nullptr));
+  // Native update flags: Size (0) and Pre-delay (3) write flag 2, all others write 1, so the last
+  // setter wins. SIZELAST=1 sets Size last so the structural (flag 2) update is the pending one.
+  if (getenv("SIZELAST")) {
+    for (unsigned i = 1; i < 7; i++) set(c, i, strtof(argv[2 + i], nullptr));
+    set(c, 0, strtof(argv[2], nullptr));
+  } else {
+    for (unsigned i = 0; i < 7; i++) set(c, i, strtof(argv[2 + i], nullptr));
+  }
   if (getenv("FLAG7")) set(c, 7, 1.0f);
   const bool right = argc > 9 && std::string(argv[9]) == "right";
   constexpr unsigned N = 1024, BLOCKS = 32; const unsigned WARM = getenv("WARM") ? atoi(getenv("WARM")) : 12;
