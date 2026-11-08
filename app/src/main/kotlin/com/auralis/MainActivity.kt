@@ -47,6 +47,14 @@ class MainActivity : Activity() {
     private lateinit var limiterToggle: CheckBox
     private lateinit var limiterPathButton: Button
     private var limiterPath = 0
+    private var replayMode = 0      // 0 None, 1 Apply, 2 Apply Peak
+    private var replaySource = 0    // 0 Album, 1 Track
+    private lateinit var replayModeButton: Button
+    private lateinit var replaySourceButton: Button
+    private lateinit var replayPreampValue: TextView
+    private lateinit var replayPreampSlider: SeekBar
+    private lateinit var replayDefaultValue: TextView
+    private lateinit var replayDefaultSlider: SeekBar
     private lateinit var eqContainer: LinearLayout
     private lateinit var eqCount: TextView
     private val eqControls = mutableListOf<EqUiControl>()
@@ -212,6 +220,8 @@ class MainActivity : Activity() {
                     val normalized = (value - 100) / 100.0
                     val db = 48.0 * kotlin.math.abs(normalized)
                     balanceValue.text = when {
+                        normalized >= 1.0 -> "Right bias · left silent (gain exactly 0)"
+                        normalized <= -1.0 -> "Left bias · right silent (gain exactly 0)"
                         normalized > 0.0 -> "Right bias · left −${"%.1f".format(db)} dB"
                         normalized < 0.0 -> "Left bias · right −${"%.1f".format(db)} dB"
                         else -> "Center · left 0.0 dB · right 0.0 dB"
@@ -248,6 +258,56 @@ class MainActivity : Activity() {
             }
         }
         page.addView(limiterPathButton, matchWrap())
+
+        addSection(page, "REPLAYGAIN", "Reads REPLAYGAIN / R128 tags (MP3, FLAC, Ogg, Opus, M4A) when a track loads")
+        replayModeButton = Button(this).apply {
+            text = replayModeText()
+            setOnClickListener {
+                replayMode = (replayMode + 1) % 3
+                text = replayModeText()
+                applyReplayGain()
+            }
+        }
+        page.addView(replayModeButton, matchWrap())
+        replaySourceButton = Button(this).apply {
+            text = replaySourceText()
+            setOnClickListener {
+                replaySource = 1 - replaySource
+                text = replaySourceText()
+                applyReplayGain()
+            }
+        }
+        page.addView(replaySourceButton, matchWrap())
+        replayPreampValue = label("Preamp: ${replayDbText(150)}")
+        page.addView(replayPreampValue)
+        replayPreampSlider = SeekBar(this).apply {
+            max = 300
+            progress = 150
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                    replayPreampValue.text = "Preamp: ${replayDbText(value)}"
+                    applyReplayGain()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        page.addView(replayPreampSlider, matchWrap())
+        replayDefaultValue = label("Gain for files without tags: ${replayDbText(150)}")
+        page.addView(replayDefaultValue)
+        replayDefaultSlider = SeekBar(this).apply {
+            max = 300
+            progress = 150
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                    replayDefaultValue.text = "Gain for files without tags: ${replayDbText(value)}"
+                    applyReplayGain()
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        page.addView(replayDefaultSlider, matchWrap())
 
         addSection(page, "PARAMETRIC EQ", "Up to 64 bands · recovered six-filter biquad model")
         eqCount = label("0 / 64 bands")
@@ -456,6 +516,23 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun replayModeText() = when (replayMode) {
+        0 -> "Mode: None"
+        1 -> "Mode: Apply"
+        else -> "Mode: Apply Peak (limit to peak headroom)"
+    }
+
+    private fun replaySourceText() = if (replaySource == 0) "Source: Album (falls back to track)" else "Source: Track"
+
+    // Slider progress 0..300 maps to -15.0..+15.0 dB in 0.1 dB steps.
+    private fun replayDbText(progress: Int) = "%+.1f dB".format((progress - 150) / 10.0)
+
+    private fun applyReplayGain() {
+        if (!::replayDefaultSlider.isInitialized || !::replayPreampSlider.isInitialized) return
+        playback?.setReplayGain(replayMode, replaySource,
+            (replayDefaultSlider.progress - 150) * 10, (replayPreampSlider.progress - 150) * 10)
+    }
+
     private fun syncControls() {
         playback?.setReverbEnabled(reverbToggle.isChecked)
         reverbSliders.forEachIndexed { index, slider ->
@@ -465,6 +542,7 @@ class MainActivity : Activity() {
         playback?.setBalance(balanceToggle.isChecked, (balanceSlider.progress - 100) / 100.0)
         playback?.setMono(monoToggle.isChecked)
         playback?.setLimiter(limiterToggle.isChecked, limiterPath)
+        applyReplayGain()
         eqControls.forEach { c ->
             val db = (c.gain.progress - 150) / 10.0
             playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, c.channel)

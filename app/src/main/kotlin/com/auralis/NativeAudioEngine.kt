@@ -52,6 +52,13 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
     companion object {
         init { System.loadLibrary("auralis") }
 
+        /** Parses ReplayGain tags from the leading bytes of a file (or an MP4 moov box); null when absent. */
+        fun parseReplayGain(bytes: ByteArray, length: Int): ReplayGainTags? {
+            val v = nativeParseReplayGain(bytes, length) ?: return null
+            if (v.size < 6) return null
+            return ReplayGainTags(v[0] != 0.0, v[1], v[2], v[3] != 0.0, v[4], v[5])
+        }
+
         @JvmStatic private external fun nativeCreate(sampleRate: Int): Long
         @JvmStatic private external fun nativeDestroy(handle: Long)
         @JvmStatic private external fun nativeEnqueueInput(handle: Long, buffer: ByteBuffer, frames: Int): Boolean
@@ -67,6 +74,7 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
                                                         frequencyHz: Int, q: Double, gainDb: Double, channel: Int): Boolean
         @JvmStatic private external fun nativeSetReplayGain(handle: Long, type: Int, source: Int,
                                                             defaultGainMb: Int, preampMb: Int)
+        @JvmStatic private external fun nativeParseReplayGain(bytes: ByteArray, length: Int): DoubleArray?
         @JvmStatic private external fun nativeSetReplayGainMetadata(handle: Long,
             albumAvailable: Boolean, albumGainDb: Double, albumPeakLinear: Double,
             trackAvailable: Boolean, trackGainDb: Double, trackPeakLinear: Double)

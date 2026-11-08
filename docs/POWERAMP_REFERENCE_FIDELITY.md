@@ -63,7 +63,7 @@ The configurable ceiling is recalculated from the accumulated upstream linear ga
 - Apply Peak cap: `2000*log10(1/peakLinear)` millibels; applied gain is the minimum of requested and peak cap.
 - Conversion: `10^(mB/2000)`.
 
-The player currently delegates decoding to Android's media stack; it does not yet contain a format-independent ReplayGain tag extractor. The native gain model accepts exact album/track metadata values when supplied. The supplied reference does not give ReplayGain preference bounds, so Auralis does not add arbitrary clamping.
+The player delegates decoding to Android's media stack and reads ReplayGain tags itself (2026-11-08): the native reader in `replaygain_tags.cpp` parses ID3v2.2/2.3/2.4 `TXXX` frames (MP3, also in front of FLAC), FLAC and Ogg Vorbis/Opus comments, and MP4/M4A iTunes freeform atoms; `ReplayGainReader.kt` hands it the head of the file (up to 4 MB) or, for MP4, the `moov` box, once per track. Opus `R128_TRACK_GAIN` / `R128_ALBUM_GAIN` (Q7.8 dB relative to -23 LUFS) are converted to the ReplayGain reference by adding 5 dB, and carry no peak. A missing peak is 0, which disables the peak cap. These formats and tag names are the common conventions; Poweramp's own tag reader was not examined, so which files it finds tags in is not verified. The mode, source, preamp and untagged-file gain are set from the ReplayGain section of the main screen. Tag parsing is covered by `tests/replaygain_tags_tests.cpp` (synthetic files in every format, truncations and random corruption; the suite is also clean under AddressSanitizer and UBSan).
 
 ### Reverb parameter model and delay geometry
 
@@ -89,7 +89,7 @@ The native reference model also retains:
 - Dither choices 1–9 by name; their native indices are retained as 1–9. The noise-shaping coefficient sets are not supplied.
 - DSD64–DSD1024 rates in both 44.1 kHz and 48 kHz families, the recovered cutoff rule, and the exact DSD64/DSD128 coefficient arrays. The complete DSD processing pipeline and remaining coefficient tables are not supplied.
 - No-DVC headroom default −600 mB; bounds −1000 to 0 mB in 50 mB increments.
-- ReplayGain metadata equations are implemented, but a general ReplayGain tag parser is not included in this player build.
+- ReplayGain metadata equations match the native routine bit for bit, and tags are read from MP3, FLAC, Ogg Vorbis/Opus and M4A files (see the ReplayGain section). Not covered: APEv2 and ID3v1 tags, WAV/AIFF chunks, and ReplayGain stored only in a container Android cannot open.
 - Smooth EQ border ceiling expression `12.5 - S/120` and separation of `dsp_border_gain` from `eq_limiter_enabled`.
 - The named output volume modes without inventing numeric native IDs.
 - Native plugin indices: limiter 1, StereoWide 2, Balance 3.
@@ -183,7 +183,7 @@ Preferences: `rg_type` (0=None, 1=Apply, 2=Apply Peak), `rg_source` (0=Album, 1=
 
 Metadata route: `Pipeline2.k → route code 258 → receiver 0x3295E8 → handler 0x320534 → player-slot ReplayGain fields`. Slot fields: `+0x38` availability mask, `+0x40` album gain, `+0x48` album peak, `+0x3C` track gain, `+0x44` track peak. Availability bit 0 indicates album data; bit 1 indicates track data. Related record notes: parent offsets `+0x350` and `+0x5B8`, corresponding records `+0x140` and `+0x3A8`, recomputation gate at record offset `+0x21C`, bit 3.
 
-The gain law and album/track fallback are implemented in the native reference model. File tag extraction is not: this Android playback build does not yet read ReplayGain tags from media metadata.
+The gain law and album/track fallback are implemented in the native reference model and verified against the native routine. File tag extraction is implemented separately (see the ReplayGain section above); it is not part of the native routine's behavior.
 
 ### Reverb setter and initialization
 

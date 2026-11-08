@@ -1,6 +1,8 @@
 #include "audio_engine.h"
+#include "replaygain_tags.h"
 #include <jni.h>
 #include <new>
+#include <vector>
 
 using auralis::AudioPipeline;
 
@@ -104,4 +106,26 @@ Java_com_auralis_NativeAudioEngine_nativeSetReplayGainMetadata(JNIEnv*, jclass, 
     metadata.trackGainDb = trackGainDb;
     metadata.trackPeakLinear = trackPeakLinear;
     p->setReplayGainMetadata(metadata);
+}
+
+// Parses ReplayGain tags from the leading bytes of a file (or an MP4 moov box). Returns
+// {albumAvailable, albumGainDb, albumPeak, trackAvailable, trackGainDb, trackPeak} as doubles
+// (availability is 1.0 or 0.0), or null when no ReplayGain tag was found.
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_com_auralis_NativeAudioEngine_nativeParseReplayGain(JNIEnv* env, jclass, jbyteArray bytes, jint length) {
+    if (bytes == nullptr || length <= 0) return nullptr;
+    const jsize available = env->GetArrayLength(bytes);
+    const jsize count = length < available ? length : available;
+    std::vector<jbyte> buffer(static_cast<std::size_t>(count));
+    env->GetByteArrayRegion(bytes, 0, count, buffer.data());
+    if (env->ExceptionCheck()) return nullptr;
+    auralis::ReplayGainMetadata metadata{};
+    if (!auralis::parseReplayGainTags(reinterpret_cast<const std::uint8_t*>(buffer.data()),
+                                      buffer.size(), metadata)) return nullptr;
+    const jdouble values[6] = {metadata.albumAvailable ? 1.0 : 0.0, metadata.albumGainDb, metadata.albumPeakLinear,
+                               metadata.trackAvailable ? 1.0 : 0.0, metadata.trackGainDb, metadata.trackPeakLinear};
+    jdoubleArray result = env->NewDoubleArray(6);
+    if (result == nullptr) return nullptr;
+    env->SetDoubleArrayRegion(result, 0, 6, values);
+    return result;
 }

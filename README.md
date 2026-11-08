@@ -20,6 +20,7 @@ The debug APK is produced at `app/build/outputs/apk/debug/app-debug.apk`.
 - Process interleaved stereo Float32 blocks using preallocated lock-free SPSC queues.
 - Apply the recovered StereoWide Mid/Side mapping and the six recovered biquad EQ families.
 - Apply native-routed Mono fold-down and signed Balance attenuation.
+- ReplayGain: tags are read from MP3, FLAC, Ogg Vorbis/Opus and M4A files when a track loads; choose mode, source, preamp and the gain for untagged files in the ReplayGain section.
 - Apply the linked-stereo peak Limiter with hard-ceiling and gain-derived protection paths, scalar tail processing and four-frame vector envelope updates.
 - Reverb is an audible, stateful stage (UI -> service -> JNI -> native). Its late field is a captured Poweramp response at one preset (Size 0.55, Filter 0.50, Fade 0.45, Pre-delay 0.15, Mix 1.0, Pre-delay Mix 0.50, Damp 0.50). Changing those controls does not yet reshape the sound the way Poweramp does; see the fidelity doc.
 - Keep UI-to-DSP changes in a bounded lock-free control queue so the DSP worker does not take a UI mutex.

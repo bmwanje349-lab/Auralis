@@ -41,6 +41,10 @@ class PlaybackService : Service() {
     @Volatile private var limiterEnabled = false
     @Volatile private var limiterPath = 0
     @Volatile private var reverbEnabled = false
+    @Volatile private var replayGainType = 0          // 0 None, 1 Apply, 2 Apply Peak
+    @Volatile private var replayGainSource = 0        // 0 Album, 1 Track
+    @Volatile private var replayGainDefaultMb = 0
+    @Volatile private var replayGainPreampMb = 0
     private val reverbParameters = doubleArrayOf(0.55, 0.50, 0.45, 0.15, 1.00, 0.50, 0.50)
     private val eqSettings = ConcurrentHashMap<Int, EqSetting>()
 
@@ -117,6 +121,16 @@ class PlaybackService : Service() {
         }
     }
 
+    fun setReplayGain(type: Int, source: Int, defaultGainMb: Int, preampMb: Int) {
+        synchronized(configLock) {
+            replayGainType = type.coerceIn(0, 2)
+            replayGainSource = source.coerceIn(0, 1)
+            replayGainDefaultMb = defaultGainMb.coerceIn(-3000, 3000)
+            replayGainPreampMb = preampMb.coerceIn(-3000, 3000)
+            session?.engine?.setReplayGain(replayGainType, replayGainSource, replayGainDefaultMb, replayGainPreampMb)
+        }
+    }
+
     fun setEqBand(index: Int, enabled: Boolean, type: Int, frequencyHz: Int,
                   q: Double, gainDb: Double, channel: Int = 0): Boolean {
         synchronized(configLock) {
@@ -155,6 +169,9 @@ class PlaybackService : Service() {
             codec.start()
             s.extractor = extractor
             s.codec = codec
+            // Tags are read once per track; the engine keeps them, so later preference changes
+            // only need the new settings.
+            val replayGainTags = ReplayGainReader.read(this, s.uri) ?: ReplayGainTags()
             val nativeEngine = NativeAudioEngine(sampleRate)
             synchronized(configLock) {
                 nativeEngine.setStereoWide(stereoEnabled, stereoPercent)
@@ -163,6 +180,8 @@ class PlaybackService : Service() {
                 nativeEngine.setLimiter(limiterEnabled, limiterPath)
                 reverbParameters.forEachIndexed { index, value -> nativeEngine.setReverbParameter(index, value) }
                 nativeEngine.setReverbEnabled(reverbEnabled)
+                nativeEngine.setReplayGain(replayGainType, replayGainSource, replayGainDefaultMb, replayGainPreampMb)
+                nativeEngine.setReplayGainMetadata(replayGainTags)
                 eqSettings.values.forEach { e ->
                     nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
                 }
