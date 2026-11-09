@@ -670,6 +670,7 @@ class MainActivity : Activity() {
         activateLibraryPage(state, searchMode = true)
         displayContentPage(state.page)
         renderLibraryItems(state.countLabel)
+        librarySearchField?.requestFocus()
     }
 
     private fun dspCard(parent: LinearLayout, title: String, subtitle: String, contentBuilder: (LinearLayout) -> Unit): LinearLayout {
