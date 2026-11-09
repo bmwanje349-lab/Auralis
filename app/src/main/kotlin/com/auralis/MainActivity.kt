@@ -72,6 +72,7 @@ class MainActivity : Activity() {
     private lateinit var miniTitle: TextView
     private lateinit var miniSubtitle: TextView
     private lateinit var miniPlayButton: MaterialButton
+    private lateinit var miniProgress: android.widget.ProgressBar
     private lateinit var topHeader: LinearLayout
     private lateinit var bottomNavigation: LinearLayout
     private val navigationItems = linkedMapOf<String, LinearLayout>()
@@ -479,7 +480,16 @@ class MainActivity : Activity() {
             setOnClickListener { togglePlayback() }
         }
         miniContent.addView(miniPlayButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(10) })
-        miniPlayerCard.addView(miniContent)
+        miniProgress = android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = 0
+            progressTintList = ColorStateList.valueOf(cAccent)
+            progressBackgroundTintList = ColorStateList.valueOf(cBorder)
+        }
+        val miniStack = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        miniStack.addView(miniContent)
+        miniStack.addView(miniProgress, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
+        miniPlayerCard.addView(miniStack)
         root.addView(miniPlayerCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             marginStart = dp(18); marginEnd = dp(18); topMargin = dp(9); bottomMargin = dp(9)
         })
@@ -581,11 +591,18 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(24), dp(24), dp(38))
         }
+        val hourOfDay = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val greeting = when {
+            hourOfDay < 5 -> "Late night listening"
+            hourOfDay < 12 -> "Good morning"
+            hourOfDay < 18 -> "Good afternoon"
+            else -> "Good evening"
+        }
         content.addView(uiText("YOUR MUSIC", 11f, cAccent, true).apply { letterSpacing = 0.18f })
-        content.addView(uiText("Find your next\nfavourite.", 32f, cText, true).apply {
-            setPadding(0, dp(8), 0, dp(7)); setLineSpacing(dp(1).toFloat(), 1.0f)
-        })
-        content.addView(uiText("A personal space for the music you love.", 14f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
+        content.addView(uiText(greeting, 32f, cText, true).apply { setPadding(0, dp(8), 0, dp(6)) })
+        content.addView(uiText(
+            if (libraryTracks.isEmpty()) "Add music to get started" else "${libraryTracks.size} songs ready to play",
+            14f, cMuted).apply { setPadding(0, 0, 0, dp(18)) })
 
         val current = playback?.currentEntry()
         val activeTrack = current?.let { entry -> libraryTrackByUri[entry.uri] } ?: currentNowPlaying
@@ -613,6 +630,22 @@ class MainActivity : Activity() {
         featuredRow.addView(featureText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         featuredCard.addView(featuredRow)
         content.addView(featuredCard, matchWrap())
+
+        val quickActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        quickActions.addView(materialAction("Shuffle all", true, true).apply {
+            setOnClickListener {
+                val all = librarySnapshot
+                if (all.isEmpty()) requestLibraryPermissionOrLoad()
+                else {
+                    playback?.setShuffle(true)
+                    playTracks(all.shuffled(), 0)
+                }
+            }
+        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginEnd = dp(8) })
+        quickActions.addView(materialAction("Sound studio", false, true).apply {
+            setOnClickListener { showDsp() }
+        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) })
+        content.addView(quickActions, matchWrap().apply { topMargin = dp(14) })
 
         val albumGroups = homeAlbumTracks
         if (albumGroups.isNotEmpty()) {
@@ -1840,7 +1873,8 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(dp(60), dp(60)).apply { marginEnd = dp(14) })
 
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        info.addView(uiText(track.title, 15f, cText, true).apply { maxLines = 1 })
+        val isCurrentTrack = playback?.currentEntry()?.uri == track.uri
+        info.addView(uiText(track.title, 15f, if (isCurrentTrack) cAccent else cText, true).apply { maxLines = 1 })
         info.addView(uiText(track.artist, 12f, cMuted).apply {
             maxLines = 1
             setPadding(0, dp(4), 0, 0)
@@ -1955,9 +1989,12 @@ class MainActivity : Activity() {
                 else -> showHome()
             }
         }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        val queueSize = playback?.queueSnapshot()?.size ?: 0
+        val queuePosition = (playback?.currentQueueIndex() ?: -1) + 1
+        val positionText = if (queueSize > 0 && queuePosition > 0) "$queuePosition of $queueSize" else "Auralis Player"
         val topTitle = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         topTitle.addView(uiText("NOW PLAYING", 10f, cText, true).apply { gravity = Gravity.CENTER; letterSpacing = 0.16f })
-        topTitle.addView(uiText("AURALIS PLAYER", 8f, cMuted).apply { gravity = Gravity.CENTER; setPadding(0, dp(3), 0, 0) })
+        topTitle.addView(uiText(positionText, 12f, cMuted).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) })
         topBar.addView(topTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         topBar.addView(iconControl(R.drawable.ic_queue, "Playback queue", 42, Color.rgb(33, 52, 58)) { showQueueDialog() },
             LinearLayout.LayoutParams(dp(42), dp(42)))
@@ -2047,7 +2084,34 @@ class MainActivity : Activity() {
             PlaybackService.REPEAT_ONE -> "Repeat one"
             else -> "Repeat off"
         }
-        content.addView(uiText("${if (playback?.isShuffleEnabled() == true) "Shuffle on" else "Shuffle off"}   ·   $repeatLabel", 12f, cMuted).apply { gravity = Gravity.CENTER })
+        if (playback?.isShuffleEnabled() == true || (playback?.getRepeatMode() ?: 0) != PlaybackService.REPEAT_OFF) {
+            content.addView(uiText("${if (playback?.isShuffleEnabled() == true) "Shuffle on" else "Shuffle off"}   ·   $repeatLabel", 12f, cMuted).apply { gravity = Gravity.CENTER })
+        }
+
+        val upNext = if (playback?.isShuffleEnabled() == true) null else playback?.queueSnapshot()?.let { items ->
+            val next = (playback?.currentQueueIndex() ?: -1) + 1
+            if (next in items.indices) items[next] else null
+        }
+        if (upNext != null) {
+            val upNextCard = roundedCard(cSurfaceRaised, 18).apply {
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { showQueueDialog() }
+            }
+            val upNextRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+            }
+            val upNextText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            upNextText.addView(uiText("UP NEXT", 9f, cAccent, true).apply { letterSpacing = 0.13f })
+            upNextText.addView(uiText(upNext.title, 14f, cText, true).apply { maxLines = 1; setPadding(0, dp(5), 0, dp(2)) })
+            upNextText.addView(uiText(upNext.artist, 12f, cMuted).apply { maxLines = 1 })
+            upNextRow.addView(upNextText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            upNextRow.addView(uiText("›", 22f, cAccent, true))
+            upNextCard.addView(upNextRow)
+            content.addView(upNextCard, matchWrap().apply { topMargin = dp(26) })
+        }
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(materialAction("Playback queue", false, true).apply {
@@ -2056,7 +2120,7 @@ class MainActivity : Activity() {
         actions.addView(materialAction("Sound studio", false, true).apply {
             setOnClickListener { showDsp() }
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(8) })
-        content.addView(actions, matchWrap().apply { topMargin = dp(30) })
+        content.addView(actions, matchWrap().apply { topMargin = dp(if (upNext != null) 16 else 30) })
         val sleepRemaining = playback?.sleepTimerRemainingMs() ?: 0L
         content.addView(materialAction(
             if (sleepRemaining > 0L) "Sleep timer  ·  ${(sleepRemaining + 59_999L) / 60_000L} min left" else "Sleep timer", false, true
@@ -2139,6 +2203,9 @@ class MainActivity : Activity() {
                     nowPlayingSeekBar.value = ((position.coerceAtMost(duration) * 1000L) / duration).toFloat()
                     if (::nowPositionLabel.isInitialized) nowPositionLabel.text = formatTime(position)
                     if (::nowDurationLabel.isInitialized) nowDurationLabel.text = formatTime(duration)
+                }
+                if (::miniProgress.isInitialized) {
+                    miniProgress.progress = if (duration > 0L) ((position.coerceAtMost(duration) * 1000L) / duration).toInt() else 0
                 }
                 updateMiniPlayer()
             }
