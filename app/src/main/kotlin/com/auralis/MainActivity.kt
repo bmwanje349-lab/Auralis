@@ -1001,6 +1001,7 @@ class MainActivity : Activity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentSearch = s?.toString().orEmpty()
+                libraryQueryGeneration++
                 pendingLibraryQuery?.cancel(true)
                 pendingSearchRender?.let(uiHandler::removeCallbacks)
                 val render = Runnable { renderLibraryItems(libraryCountLabel) }
@@ -1053,7 +1054,8 @@ class MainActivity : Activity() {
         val playlist = currentPlaylist
         val searchMode = isSearchPage
         val sourceTracks = librarySnapshot
-        val favourites = if (tab == LIBRARY_FAVOURITES || playlist == PlaylistStore.FAVOURITES_NAME) {
+        val favourites = if (tab == LIBRARY_FAVOURITES || tab == LIBRARY_PLAYLISTS ||
+            playlist == PlaylistStore.FAVOURITES_NAME) {
             playlistStore.favourites()
         } else emptySet()
         val playlistIds = if (tab == LIBRARY_PLAYLISTS && playlist != null) {
