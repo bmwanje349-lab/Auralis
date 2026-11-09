@@ -515,12 +515,54 @@ class MainActivity : Activity() {
         showHome()
     }
 
-    private fun showHome() {
+    private fun displayContentPage(page: View) {
+        if (page.parent !== contentFrame) {
+            (page.parent as? ViewGroup)?.removeView(page)
+            contentFrame.addView(page, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            ))
+        }
+        for (index in 0 until contentFrame.childCount) {
+            val child = contentFrame.getChildAt(index)
+            child.visibility = if (child === page) View.VISIBLE else View.GONE
+        }
+    }
+
+    private fun restoreLibraryPage(key: String, searchMode: Boolean): LibraryPageState {
+        val existing = libraryPages[key]
+        if (existing != null) return existing
+
+        isSearchPage = searchMode
+        val page = buildLibraryView(searchMode)
+        return LibraryPageState(
+            page,
+            librarySearchField ?: error("Library search field was not built"),
+            libraryCountLabel ?: error("Library count label was not built"),
+            libraryListContainer ?: error("Library collection container was not built"),
+            libraryCollectionScroll ?: error("Library collection scroll was not built"),
+            libraryListView ?: error("Library track list was not built")
+        ).also { libraryPages[key] = it }
+    }
+
+    private fun activateLibraryPage(state: LibraryPageState, searchMode: Boolean) {
+        isSearchPage = searchMode
+        librarySearchField = state.searchField
+        libraryCountLabel = state.countLabel
+        libraryListContainer = state.collectionContainer
+        libraryCollectionScroll = state.collectionScroll
+        libraryListView = state.trackList
+        libraryTrackAdapter = state.trackList.adapter as? TrackListAdapter
+    }
+
+    private fun showHome(refreshContent: Boolean = false) {
         activeDestination = DEST_HOME
         updateNavigationState()
         updateMiniPlayer()
-        contentFrame.removeAllViews()
-        contentFrame.addView(buildHomeView(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        if (refreshContent) {
+            destinationPages.remove(DEST_HOME)?.let(contentFrame::removeView)
+        }
+        val page = destinationPages.getOrPut(DEST_HOME) { buildHomeView() }
+        displayContentPage(page)
     }
 
     private fun buildHomeView(): View {
@@ -617,13 +659,16 @@ class MainActivity : Activity() {
         return page
     }
 
-    private fun showSearch() {
+    private fun showSearch(refreshContent: Boolean = false) {
         activeDestination = DEST_SEARCH
         updateNavigationState()
         updateMiniPlayer()
-        contentFrame.removeAllViews()
-        contentFrame.addView(buildLibraryView(searchMode = true), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        librarySearchField?.requestFocus()
+        if (refreshContent) {
+            libraryPages.remove(DEST_SEARCH)?.let { contentFrame.removeView(it.page) }
+        }
+        val state = restoreLibraryPage(DEST_SEARCH, searchMode = true)
+        activateLibraryPage(state, searchMode = true)
+        displayContentPage(state.page)
     }
 
     private fun dspCard(parent: LinearLayout, title: String, subtitle: String, contentBuilder: (LinearLayout) -> Unit): LinearLayout {
@@ -874,17 +919,19 @@ class MainActivity : Activity() {
         activeDestination = DEST_SOUND
         updateNavigationState()
         updateMiniPlayer()
-        contentFrame.removeAllViews()
-        contentFrame.addView(dspPage, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        displayContentPage(dspPage)
     }
 
-    private fun showLibrary() {
+    private fun showLibrary(refreshContent: Boolean = false) {
         activeDestination = DEST_LIBRARY
-        isSearchPage = false
         updateNavigationState()
         updateMiniPlayer()
-        contentFrame.removeAllViews()
-        contentFrame.addView(buildLibraryView(searchMode = false), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        if (refreshContent) {
+            libraryPages.remove(DEST_LIBRARY)?.let { contentFrame.removeView(it.page) }
+        }
+        val state = restoreLibraryPage(DEST_LIBRARY, searchMode = false)
+        activateLibraryPage(state, searchMode = false)
+        displayContentPage(state.page)
     }
 
     private fun buildLibraryView(searchMode: Boolean = false): View {
