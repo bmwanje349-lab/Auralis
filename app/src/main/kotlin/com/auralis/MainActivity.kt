@@ -909,13 +909,13 @@ class MainActivity : Activity() {
 
             val (width, _) = dspSlider(
                 body, "WIDTH", 0f, 100f, 1f,
-                { value -> "\${value.toInt()}%" }
+                { value -> "${value.toInt()}%" }
             ) { value ->
                 val gain = 1.0 + 2.0 * value / 100.0
                 stereoValue.text = if (value <= 0f) {
                     "Natural stereo width"
                 } else {
-                    "Wider image · side gain \${"%.2f".format(gain)}×"
+                    "Wider image · side gain ${"%.2f".format(gain)}×"
                 }
                 playback?.setStereoWide(stereoToggle.isChecked, value.toInt())
             }
@@ -945,8 +945,8 @@ class MainActivity : Activity() {
                 body, "LEFT  ·  CENTRE  ·  RIGHT", 100f, 200f, 1f,
                 { value ->
                     when {
-                        value < 100f -> "Left \${(100f - value).toInt()}%"
-                        value > 100f -> "Right \${(value - 100f).toInt()}%"
+                        value < 100f -> "Left ${(100f - value).toInt()}%"
+                        value > 100f -> "Right ${(value - 100f).toInt()}%"
                         else -> "Centre"
                     }
                 }
@@ -956,8 +956,8 @@ class MainActivity : Activity() {
                 balanceValue.text = when {
                     normalized >= 1.0 -> "Right channel only"
                     normalized <= -1.0 -> "Left channel only"
-                    normalized > 0.0 -> "Right bias · left −\${"%.1f".format(db)} dB"
-                    normalized < 0.0 -> "Left bias · right −\${"%.1f".format(db)} dB"
+                    normalized > 0.0 -> "Right bias · left −${"%.1f".format(db)} dB"
+                    normalized < 0.0 -> "Left bias · right −${"%.1f".format(db)} dB"
                     else -> "Centred · both channels equal"
                 }
                 playback?.setBalance(balanceToggle.isChecked, normalized)
@@ -1040,10 +1040,10 @@ class MainActivity : Activity() {
                     body, title, reverbInitial[index].toFloat(), 100f, 1f,
                     { value ->
                         when (index) {
-                            1 -> "\${value.toInt()}% · \${100 + 185 * value.toInt()} Hz"
-                            3 -> "\${value.toInt()}% · \${value.toInt() * 2} ms"
-                            6 -> "\${value.toInt()}% · \${18600 - 185 * value.toInt()} Hz"
-                            else -> "\${value.toInt()}%"
+                            1 -> "${value.toInt()}% · ${100 + 185 * value.toInt()} Hz"
+                            3 -> "${value.toInt()}% · ${value.toInt() * 2} ms"
+                            6 -> "${value.toInt()}% · ${18600 - 185 * value.toInt()} Hz"
+                            else -> "${value.toInt()}%"
                         }
                     }
                 ) { value ->
@@ -2157,7 +2157,7 @@ class MainActivity : Activity() {
         box.addView(heading)
 
         val gainLabel = uiText(
-            "Gain · \${"%.1f".format(initialGainDb)} dB",
+            "Gain · ${"%.1f".format(initialGainDb)} dB",
             12f, cMuted
         ).apply { setPadding(0, dp(9), 0, dp(2)) }
         val gain = Slider(this).apply {
@@ -2171,7 +2171,7 @@ class MainActivity : Activity() {
 
         fun update() {
             val db = (gain.value.toInt() - 150) / 10.0
-            gainLabel.text = "Gain · \${"%.1f".format(db)} dB"
+            gainLabel.text = "Gain · ${"%.1f".format(db)} dB"
             playback?.setEqBand(index, toggle.isChecked, type, frequency, q, db, channel)
         }
 
