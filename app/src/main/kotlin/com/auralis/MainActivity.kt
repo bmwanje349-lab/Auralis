@@ -669,6 +669,7 @@ class MainActivity : Activity() {
         val state = restoreLibraryPage(DEST_SEARCH, searchMode = true)
         activateLibraryPage(state, searchMode = true)
         displayContentPage(state.page)
+        renderLibraryItems(state.countLabel)
     }
 
     private fun dspCard(parent: LinearLayout, title: String, subtitle: String, contentBuilder: (LinearLayout) -> Unit): LinearLayout {
@@ -936,6 +937,7 @@ class MainActivity : Activity() {
         val state = restoreLibraryPage(DEST_LIBRARY, searchMode = false)
         activateLibraryPage(state, searchMode = false)
         displayContentPage(state.page)
+        renderLibraryItems(state.countLabel)
     }
 
     private fun buildLibraryView(searchMode: Boolean = false): View {
@@ -1110,7 +1112,6 @@ class MainActivity : Activity() {
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
-        renderLibraryItems(count)
         return page
     }
 
