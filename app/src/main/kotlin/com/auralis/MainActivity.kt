@@ -72,6 +72,7 @@ class MainActivity : Activity() {
     private lateinit var miniTitle: TextView
     private lateinit var miniSubtitle: TextView
     private lateinit var miniPlayButton: MaterialButton
+    private lateinit var topHeader: LinearLayout
     private lateinit var bottomNavigation: LinearLayout
     private val navigationItems = linkedMapOf<String, LinearLayout>()
     private lateinit var dspPage: View
@@ -357,17 +358,17 @@ class MainActivity : Activity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(20), 0, dp(11))
+            setPadding(0, dp(27), 0, dp(14))
         }
-        row.addView(uiText(title, 18f, cText, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(uiText(title, 20f, cText, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (action != null && onAction != null) {
             row.addView(MaterialButton(this).apply {
                 text = action
                 isAllCaps = false
-                textSize = 11f
-                cornerRadius = dp(12)
+                textSize = 12f
+                cornerRadius = dp(14)
                 insetTop = 0; insetBottom = 0
-                minHeight = dp(34)
+                minHeight = dp(38)
                 backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
                 setTextColor(cAccent)
                 setPadding(dp(8), 0, dp(8), 0)
@@ -383,7 +384,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             isClickable = true
             isFocusable = true
-            setPadding(dp(5), dp(7), dp(5), dp(5))
+            setPadding(dp(6), dp(8), dp(6), dp(6))
             setOnClickListener { onClick() }
         }
         val glyph = ImageView(this).apply {
@@ -391,8 +392,8 @@ class MainActivity : Activity() {
             imageTintList = ColorStateList.valueOf(cMuted)
             scaleType = ImageView.ScaleType.CENTER_INSIDE
         }
-        item.addView(glyph, LinearLayout.LayoutParams(dp(23), dp(23)))
-        val label = uiText(title, 10f, cMuted, false).apply { setPadding(0, dp(4), 0, 0) }
+        item.addView(glyph, LinearLayout.LayoutParams(dp(25), dp(25)))
+        val label = uiText(title, 11f, cMuted, false).apply { setPadding(0, dp(4), 0, 0) }
         item.addView(label)
         item.tag = key
         navigationItems[key] = item
@@ -418,7 +419,7 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(19), dp(12), dp(18), dp(12))
+            setPadding(dp(22), dp(14), dp(22), dp(14))
             setBackgroundColor(cBackground)
         }
         val mark = roundedCard(cAccentDeep, 15).apply { strokeWidth = 0 }
@@ -431,13 +432,14 @@ class MainActivity : Activity() {
         header.addView(mark, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(11) })
 
         val wordmark = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        wordmark.addView(uiText("AURALIS", 17f, cText, true).apply { letterSpacing = 0.15f })
-        wordmark.addView(uiText("MUSIC, IN ITS ELEMENT", 8.5f, cMuted, true).apply { letterSpacing = 0.15f; setPadding(0, dp(3), 0, 0) })
+        wordmark.addView(uiText("AURALIS", 18f, cText, true).apply { letterSpacing = 0.15f })
+        wordmark.addView(uiText("MUSIC, IN ITS ELEMENT", 9.5f, cMuted, true).apply { letterSpacing = 0.15f; setPadding(0, dp(3), 0, 0) })
         header.addView(wordmark, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(iconControl(R.drawable.ic_search, "Search music", 42, cSurface) { showSearch() },
             LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(8) })
         header.addView(iconControl(R.drawable.ic_add, "Open an audio file", 42, cSurface) { chooseAudio() },
             LinearLayout.LayoutParams(dp(42), dp(42)))
+        topHeader = header
         root.addView(header)
 
         contentFrame = FrameLayout(this)
@@ -450,16 +452,16 @@ class MainActivity : Activity() {
         val miniContent = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(9), dp(8), dp(9), dp(8))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         miniArtwork = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = roundedBackground(cAccentDeep, 12)
         }
-        miniContent.addView(miniArtwork, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(11) })
+        miniContent.addView(miniArtwork, LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(14) })
         val miniText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        miniTitle = uiText("Nothing playing", 13f, cText, true).apply { maxLines = 1 }
-        miniSubtitle = uiText("Choose a track from your library", 10.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) }
+        miniTitle = uiText("Nothing playing", 14f, cText, true).apply { maxLines = 1 }
+        miniSubtitle = uiText("Choose a track from your library", 12f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) }
         miniText.addView(miniTitle)
         miniText.addView(miniSubtitle)
         miniContent.addView(miniText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -476,10 +478,10 @@ class MainActivity : Activity() {
             backgroundTintList = ColorStateList.valueOf(cAccent)
             setOnClickListener { togglePlayback() }
         }
-        miniContent.addView(miniPlayButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(8) })
+        miniContent.addView(miniPlayButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(10) })
         miniPlayerCard.addView(miniContent)
         root.addView(miniPlayerCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            marginStart = dp(13); marginEnd = dp(13); topMargin = dp(7); bottomMargin = dp(7)
+            marginStart = dp(18); marginEnd = dp(18); topMargin = dp(9); bottomMargin = dp(9)
         })
 
         bottomNavigation = LinearLayout(this).apply {
@@ -489,13 +491,13 @@ class MainActivity : Activity() {
             background = roundedBackground(cSurface, 22)
         }
         bottomNavigation.addView(createNavItem(DEST_HOME, "Home", R.drawable.ic_home) { showHome() },
-            LinearLayout.LayoutParams(0, dp(58), 1f))
+            LinearLayout.LayoutParams(0, dp(66), 1f))
         bottomNavigation.addView(createNavItem(DEST_SEARCH, "Search", R.drawable.ic_search) { showSearch() },
-            LinearLayout.LayoutParams(0, dp(58), 1f))
+            LinearLayout.LayoutParams(0, dp(66), 1f))
         bottomNavigation.addView(createNavItem(DEST_LIBRARY, "Library", R.drawable.ic_library) { showLibrary() },
-            LinearLayout.LayoutParams(0, dp(58), 1f))
+            LinearLayout.LayoutParams(0, dp(66), 1f))
         bottomNavigation.addView(createNavItem(DEST_SOUND, "Sound", R.drawable.ic_tune) { showDsp() },
-            LinearLayout.LayoutParams(0, dp(58), 1f))
+            LinearLayout.LayoutParams(0, dp(66), 1f))
         root.addView(bottomNavigation, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             marginStart = dp(13); marginEnd = dp(13); topMargin = dp(5)
         })
@@ -513,6 +515,12 @@ class MainActivity : Activity() {
         window.navigationBarColor = cBackground
         dspPage = buildDspPage()
         showHome()
+    }
+
+    private fun setAppChromeVisible(visible: Boolean) {
+        val target = if (visible) View.VISIBLE else View.GONE
+        if (::topHeader.isInitialized) topHeader.visibility = target
+        if (::bottomNavigation.isInitialized) bottomNavigation.visibility = target
     }
 
     private fun displayContentPage(page: View) {
@@ -555,6 +563,7 @@ class MainActivity : Activity() {
     }
 
     private fun showHome(refreshContent: Boolean = false) {
+        setAppChromeVisible(true)
         activeDestination = DEST_HOME
         updateNavigationState()
         updateMiniPlayer()
@@ -570,24 +579,24 @@ class MainActivity : Activity() {
         val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(17), dp(20), dp(28))
+            setPadding(dp(24), dp(24), dp(24), dp(38))
         }
-        content.addView(uiText("YOUR MUSIC", 10f, cAccent, true).apply { letterSpacing = 0.18f })
-        content.addView(uiText("Find your next\nfavourite.", 30f, cText, true).apply {
+        content.addView(uiText("YOUR MUSIC", 11f, cAccent, true).apply { letterSpacing = 0.18f })
+        content.addView(uiText("Find your next\nfavourite.", 32f, cText, true).apply {
             setPadding(0, dp(8), 0, dp(7)); setLineSpacing(dp(1).toFloat(), 1.0f)
         })
-        content.addView(uiText("A personal space for the music you love.", 13f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
+        content.addView(uiText("A personal space for the music you love.", 14f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
 
         val current = playback?.currentEntry()
         val activeTrack = current?.let { entry -> libraryTrackByUri[entry.uri] } ?: currentNowPlaying
         val featured = activeTrack ?: libraryTracks.firstOrNull()
         val featuredCard = roundedCard(Color.rgb(20, 43, 46), 24)
-        val featuredRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(13), dp(13), dp(13), dp(13)) }
-        featuredRow.addView(artwork(featured, 104, 18), LinearLayout.LayoutParams(dp(104), dp(104)).apply { marginEnd = dp(14) })
+        val featuredRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(18), dp(18), dp(18), dp(18)) }
+        featuredRow.addView(artwork(featured, 120, 20), LinearLayout.LayoutParams(dp(120), dp(120)).apply { marginEnd = dp(18) })
         val featureText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        featureText.addView(uiText(if (activeTrack != null) "PICK UP WHERE YOU LEFT OFF" else "READY WHEN YOU ARE", 9f, cAccent, true).apply { letterSpacing = 0.1f })
-        featureText.addView(uiText(featured?.title ?: "Your library is waiting", 17f, cText, true).apply { maxLines = 2; setPadding(0, dp(7), 0, dp(3)) })
-        featureText.addView(uiText(featured?.artist ?: "Add music from your device", 11f, cMuted).apply { maxLines = 1 })
+        featureText.addView(uiText(if (activeTrack != null) "CONTINUE LISTENING" else "MADE FOR YOUR MUSIC", 10f, cAccent, true).apply { letterSpacing = 0.1f })
+        featureText.addView(uiText(featured?.title ?: "Your library is waiting", 19f, cText, true).apply { maxLines = 2; setPadding(0, dp(7), 0, dp(3)) })
+        featureText.addView(uiText(featured?.artist ?: "Add music from your device", 12.5f, cMuted).apply { maxLines = 1 })
         featureText.addView(materialAction(if (activeTrack != null) "Continue listening" else if (libraryTracks.isEmpty()) "Scan music" else "Start listening", true, true).apply {
             setOnClickListener {
                 when {
@@ -599,7 +608,7 @@ class MainActivity : Activity() {
                     else -> requestLibraryPermissionOrLoad()
                 }
             }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(39)).apply { topMargin = dp(10) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)).apply { topMargin = dp(14) }
         })
         featuredRow.addView(featureText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         featuredCard.addView(featuredRow)
@@ -609,17 +618,17 @@ class MainActivity : Activity() {
         if (albumGroups.isNotEmpty()) {
             sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary(refreshContent = true) })
             val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            albumGroups.take(8).forEach { track ->
+            albumGroups.take(7).forEach { track ->
                 val albumCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     isClickable = true
                     isFocusable = true
                     setOnClickListener { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = track.album; showLibrary(refreshContent = true) }
                 }
-                albumCard.addView(artwork(track, 138, 17), LinearLayout.LayoutParams(dp(138), dp(138)))
-                albumCard.addView(uiText(track.album, 12.5f, cText, true).apply { maxLines = 1; setPadding(0, dp(8), 0, dp(3)) })
-                albumCard.addView(uiText(track.artist, 10.5f, cMuted).apply { maxLines = 1 })
-                horizontal.addView(albumCard, LinearLayout.LayoutParams(dp(138), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(13) })
+                albumCard.addView(artwork(track, 152, 19), LinearLayout.LayoutParams(dp(152), dp(152)))
+                albumCard.addView(uiText(track.album, 14f, cText, true).apply { maxLines = 1; setPadding(0, dp(8), 0, dp(3)) })
+                albumCard.addView(uiText(track.artist, 12f, cMuted).apply { maxLines = 1 })
+                horizontal.addView(albumCard, LinearLayout.LayoutParams(dp(152), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(16) })
             }
             content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipToPadding = false; addView(horizontal) }, matchWrap())
         }
@@ -630,8 +639,8 @@ class MainActivity : Activity() {
             val emptyContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(24), dp(28), dp(24), dp(28)) }
             val emptyIcon = ImageView(this).apply { setImageResource(R.drawable.ic_headphones); imageTintList = ColorStateList.valueOf(cAccent); scaleType = ImageView.ScaleType.CENTER_INSIDE }
             emptyContent.addView(emptyIcon, LinearLayout.LayoutParams(dp(46), dp(46)))
-            emptyContent.addView(uiText("Nothing in your library yet", 17f, cText, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(6)) })
-            emptyContent.addView(uiText("Scan your device for music or open an audio file to start listening.", 12f, cMuted).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(13)) })
+            emptyContent.addView(uiText("Nothing in your library yet", 19f, cText, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(6)) })
+            emptyContent.addView(uiText("Scan your device for music or open an audio file to start listening.", 13.5f, cMuted).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(13)) })
             emptyContent.addView(materialAction("Scan music library", true).apply { setOnClickListener { requestLibraryPermissionOrLoad() } }, matchWrap())
             empty.addView(emptyContent)
             content.addView(empty, matchWrap())
@@ -646,8 +655,8 @@ class MainActivity : Activity() {
         soundRow.addView(iconControl(R.drawable.ic_equalizer, "Open sound settings", 48, cAccentDeep, cAccent) { showDsp() },
             LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(12) })
         val soundText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        soundText.addView(uiText("Shape your sound", 14f, cText, true))
-        soundText.addView(uiText("StereoWide, EQ, preamp and more", 11f, cMuted).apply { setPadding(0, dp(4), 0, 0) })
+        soundText.addView(uiText("Shape your sound", 16f, cText, true))
+        soundText.addView(uiText("StereoWide, EQ, preamp and more", 12.5f, cMuted).apply { setPadding(0, dp(4), 0, 0) })
         soundRow.addView(soundText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         soundRow.addView(uiText("›", 24f, cAccent, true))
         soundRow.setOnClickListener { showDsp() }
@@ -660,6 +669,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSearch(refreshContent: Boolean = false) {
+        setAppChromeVisible(true)
         activeDestination = DEST_SEARCH
         updateNavigationState()
         updateMiniPlayer()
@@ -921,6 +931,7 @@ class MainActivity : Activity() {
     }
 
     private fun showDsp() {
+        setAppChromeVisible(true)
         if (activeDestination != DEST_SOUND) soundReturnDestination = activeDestination
         activeDestination = DEST_SOUND
         updateNavigationState()
@@ -929,6 +940,7 @@ class MainActivity : Activity() {
     }
 
     private fun showLibrary(refreshContent: Boolean = false) {
+        setAppChromeVisible(true)
         activeDestination = DEST_LIBRARY
         updateNavigationState()
         updateMiniPlayer()
@@ -945,28 +957,28 @@ class MainActivity : Activity() {
         isSearchPage = searchMode
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(15), dp(20), dp(9))
+            setPadding(dp(24), dp(22), dp(24), dp(16))
             setBackgroundColor(cBackground)
         }
         val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val headingCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        headingCopy.addView(uiText(if (searchMode) "Search" else "Your library", 25f, cText, true))
-        headingCopy.addView(uiText(if (searchMode) "Find a track, album or artist." else "Everything you have saved, together.", 11.5f, cMuted).apply { setPadding(0, dp(5), 0, 0) })
+        headingCopy.addView(uiText(if (searchMode) "Search" else "Your library", 28f, cText, true))
+        headingCopy.addView(uiText(if (searchMode) "Find a track, album or artist." else "Your music, organised in one place.", 13f, cMuted).apply { setPadding(0, dp(5), 0, 0) })
         heading.addView(headingCopy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (!searchMode) {
             heading.addView(iconControl(R.drawable.ic_refresh, "Rescan music library", 42, cSurface) { requestLibraryPermissionOrLoad() },
                 LinearLayout.LayoutParams(dp(42), dp(42)))
         }
-        page.addView(heading, matchWrap().apply { bottomMargin = dp(15) })
+        page.addView(heading, matchWrap().apply { bottomMargin = dp(22) })
 
-        val searchWrap = roundedCard(cSurface, 17).apply { strokeColor = cBorder; strokeWidth = dp(1) }
-        val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(13), 0, dp(12), 0) }
+        val searchWrap = roundedCard(cSurface, 20).apply { strokeColor = cBorder; strokeWidth = dp(1) }
+        val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
         val searchIcon = ImageView(this).apply { setImageResource(R.drawable.ic_search); imageTintList = ColorStateList.valueOf(cMuted) }
         searchRow.addView(searchIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(10) })
         val search = EditText(this).apply {
             hint = "Search your music"
             setSingleLine(true)
-            textSize = 14f
+            textSize = 15.5f
             setTextColor(cText)
             setHintTextColor(cMuted)
             background = null
@@ -974,20 +986,20 @@ class MainActivity : Activity() {
             setText(currentSearch)
             imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
         }
-        searchRow.addView(search, LinearLayout.LayoutParams(0, dp(48), 1f))
+        searchRow.addView(search, LinearLayout.LayoutParams(0, dp(56), 1f))
         if (currentSearch.isNotBlank()) {
             searchRow.addView(iconControl(R.drawable.ic_back, "Clear search", 30, Color.TRANSPARENT, cMuted) {
                 search.setText("")
             }, LinearLayout.LayoutParams(dp(30), dp(30)))
         }
         searchWrap.addView(searchRow)
-        page.addView(searchWrap, matchWrap().apply { bottomMargin = dp(13) })
+        page.addView(searchWrap, matchWrap().apply { bottomMargin = dp(18) })
         librarySearchField = search
 
         val categories = ChipGroup(this).apply {
             isSingleSelection = true
             isSingleLine = true
-            chipSpacingHorizontal = dp(7)
+            chipSpacingHorizontal = dp(10)
             chipSpacingVertical = 0
         }
         listOf(LIBRARY_SONGS, LIBRARY_ALBUMS, LIBRARY_ARTISTS, LIBRARY_FAVOURITES, LIBRARY_PLAYLISTS).forEach { tab ->
@@ -996,13 +1008,14 @@ class MainActivity : Activity() {
                 isCheckable = true
                 isChecked = currentLibraryTab == tab
                 isClickable = true
-                chipCornerRadius = dp(15).toFloat()
+                chipCornerRadius = dp(18).toFloat()
                 chipStrokeWidth = dp(1).toFloat()
                 chipStrokeColor = ColorStateList.valueOf(if (isChecked) cAccent else cBorder)
                 chipBackgroundColor = ColorStateList.valueOf(if (isChecked) cAccentDeep else cSurface)
                 setTextColor(if (isChecked) cAccent else cMuted)
-                textSize = 11f
-                setEnsureMinTouchTargetSize(false)
+                textSize = 12f
+                chipMinHeight = dp(38).toFloat()
+                setEnsureMinTouchTargetSize(true)
                 setOnClickListener {
                     if (currentLibraryTab != tab) {
                         currentLibraryTab = tab
@@ -1016,17 +1029,17 @@ class MainActivity : Activity() {
         page.addView(HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
             addView(categories)
-        }, matchWrap().apply { bottomMargin = dp(8) })
+        }, matchWrap().apply { bottomMargin = dp(14) })
 
         val detail = currentAlbum ?: currentArtist ?: currentPlaylist
         if (detail != null) {
             val back = MaterialButton(this).apply {
                 text = "‹   ${currentLibraryTab.uppercase()}"
                 isAllCaps = false
-                textSize = 10f
-                cornerRadius = dp(12)
+                textSize = 11.5f
+                cornerRadius = dp(14)
                 insetTop = 0; insetBottom = 0
-                minHeight = dp(34)
+                minHeight = dp(40)
                 backgroundTintList = ColorStateList.valueOf(cSurface)
                 setTextColor(cAccent)
                 setOnClickListener { currentAlbum = null; currentArtist = null; currentPlaylist = null; if (searchMode) showSearch(refreshContent = true) else showLibrary(refreshContent = true) }
@@ -1035,19 +1048,19 @@ class MainActivity : Activity() {
         }
 
         val sortRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val count = uiText("", 11f, cMuted)
+        val count = uiText("", 12f, cMuted)
         libraryCountLabel = count
         sortRow.addView(count, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val sortButton = MaterialButton(this).apply {
             text = "Sort  ·  $currentSort"
             isAllCaps = false
-            textSize = 10.5f
-            cornerRadius = dp(12)
+            textSize = 12f
+            cornerRadius = dp(14)
             insetTop = 0; insetBottom = 0
-            minHeight = dp(34)
+            minHeight = dp(40)
             backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
             setTextColor(cMuted)
-            setPadding(dp(7), 0, dp(7), 0)
+            setPadding(dp(12), 0, dp(12), 0)
             setOnClickListener {
                 val menu = android.widget.PopupMenu(this@MainActivity, this)
                 arrayOf(SORT_TITLE, SORT_ARTIST, SORT_ALBUM, SORT_RECENT).forEach { menu.menu.add(it) }
@@ -1061,11 +1074,11 @@ class MainActivity : Activity() {
             }
         }
         sortRow.addView(sortButton)
-        page.addView(sortRow, matchWrap().apply { topMargin = dp(5); bottomMargin = dp(5) })
+        page.addView(sortRow, matchWrap().apply { topMargin = dp(8); bottomMargin = dp(12) })
 
         libraryListContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(3), 0, dp(15))
+            setPadding(0, dp(8), 0, dp(24))
         }
         val listScroll = ScrollView(this).apply {
             isFillViewport = true
@@ -1082,7 +1095,7 @@ class MainActivity : Activity() {
             isSmoothScrollbarEnabled = true
             cacheColorHint = Color.TRANSPARENT
             setBackgroundColor(cBackground)
-            setPadding(0, dp(3), 0, dp(12))
+            setPadding(0, dp(8), 0, dp(22))
             clipToPadding = false
         }
         libraryTrackAdapter = TrackListAdapter()
@@ -1150,17 +1163,17 @@ class MainActivity : Activity() {
                 row = LinearLayout(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(3), dp(6), dp(3), dp(6))
+                    setPadding(dp(4), dp(9), dp(4), dp(9))
                 }
-                val art = artworkThumbnail(null, 52, 11)
-                row.addView(art, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(11) })
+                val art = artworkThumbnail(null, 60, 12)
+                row.addView(art, LinearLayout.LayoutParams(dp(60), dp(60)).apply { marginEnd = dp(14) })
                 val info = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
-                val title = uiText("", 13f, cText, true).apply { maxLines = 1 }
-                val artist = uiText("", 10.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) }
+                val title = uiText("", 15f, cText, true).apply { maxLines = 1 }
+                val artist = uiText("", 12f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) }
                 info.addView(title)
                 info.addView(artist)
                 row.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                val duration = uiText("", 10f, cMuted).apply { setPadding(dp(4), 0, dp(2), 0) }
+                val duration = uiText("", 11.5f, cMuted).apply { setPadding(dp(4), 0, dp(2), 0) }
                 row.addView(duration)
                 val more = ImageView(this@MainActivity).apply {
                     setImageResource(R.drawable.ic_more)
@@ -1171,7 +1184,7 @@ class MainActivity : Activity() {
                     isFocusable = true
                     setPadding(dp(8), dp(8), dp(8), dp(8))
                 }
-                row.addView(more, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(4) })
+                row.addView(more, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(6) })
                 holder = TrackRowHolder(art, title, artist, duration, more)
                 row.tag = holder
             } else {
@@ -1184,7 +1197,7 @@ class MainActivity : Activity() {
             holder.title.text = track.title
             holder.artist.text = track.artist
             holder.duration.text = track.durationLabel
-            bindArtwork(holder.artwork, track.albumArtUri, 52)
+            bindArtwork(holder.artwork, track.albumArtUri, 60)
             holder.position = position
             holder.more.setOnClickListener { holder.track?.let { showTrackActions(it) } }
             row.setOnClickListener {
@@ -1486,25 +1499,28 @@ class MainActivity : Activity() {
         artTrack: MusicTrack? = null,
         click: () -> Unit
     ) {
-        val row = roundedCard(cSurface, 18).apply {
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { click() }
-        }
-        val content = LinearLayout(this).apply {
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(11), dp(10), dp(12), dp(10))
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(4), dp(11), dp(4), dp(11))
+            setOnClickListener { click() }
         }
-        content.addView(artwork(artTrack, 56, 13), LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(13) })
+        row.addView(artworkThumbnail(artTrack, 64, 13),
+            LinearLayout.LayoutParams(dp(64), dp(64)).apply { marginEnd = dp(16) })
         val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        text.addView(uiText(title, 14f, cText, true).apply { maxLines = 1 })
-        text.addView(uiText(subtitle, 11f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) })
-        content.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        content.addView(uiText(trailing, 10f, cMuted).apply { setPadding(dp(7), 0, dp(3), 0) })
-        content.addView(uiText("›", 23f, cAccent).apply { setPadding(dp(4), 0, 0, 0) })
-        row.addView(content)
-        parent.addView(row, matchWrap().apply { topMargin = dp(6) })
+        text.addView(uiText(title, 15.5f, cText, true).apply { maxLines = 1 })
+        text.addView(uiText(subtitle, 12.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(5), 0, 0) })
+        row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(uiText(trailing, 12f, cMuted).apply { setPadding(dp(8), 0, dp(4), 0) })
+        row.addView(uiText("›", 24f, cAccent).apply { setPadding(dp(5), 0, 0, 0) })
+        parent.addView(row, matchWrap())
+
+        val divider = View(this).apply { setBackgroundColor(cBorder) }
+        parent.addView(divider, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+        ).apply { leftMargin = dp(80) })
     }
 
     private fun addTrackRow(parent: LinearLayout, track: MusicTrack, queueTracks: List<MusicTrack>, index: Int) {
@@ -1513,20 +1529,20 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             isClickable = true
             isFocusable = true
-            setPadding(dp(3), dp(6), dp(3), dp(6))
+            setPadding(dp(4), dp(9), dp(4), dp(9))
             setOnClickListener { playTracks(queueTracks, index) }
         }
-        row.addView(artworkThumbnail(track, 52, 11),
-            LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(11) })
+        row.addView(artworkThumbnail(track, 60, 12),
+            LinearLayout.LayoutParams(dp(60), dp(60)).apply { marginEnd = dp(14) })
 
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        info.addView(uiText(track.title, 13f, cText, true).apply { maxLines = 1 })
-        info.addView(uiText(track.artist, 10.5f, cMuted).apply {
+        info.addView(uiText(track.title, 15f, cText, true).apply { maxLines = 1 })
+        info.addView(uiText(track.artist, 12f, cMuted).apply {
             maxLines = 1
             setPadding(0, dp(4), 0, 0)
         })
         row.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(uiText(track.durationLabel, 10f, cMuted).apply {
+        row.addView(uiText(track.durationLabel, 11.5f, cMuted).apply {
             setPadding(dp(4), 0, dp(2), 0)
         })
 
@@ -1540,14 +1556,14 @@ class MainActivity : Activity() {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             setOnClickListener { showTrackActions(track) }
         }
-        row.addView(more, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(4) })
+        row.addView(more, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(6) })
         row.setOnLongClickListener { showTrackActions(track); true }
         parent.addView(row, matchWrap().apply { topMargin = dp(2) })
 
         val divider = View(this).apply { setBackgroundColor(cBorder) }
         parent.addView(divider, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
-        ).apply { leftMargin = dp(64) })
+        ).apply { leftMargin = dp(78) })
     }
 
     private fun playTracks(tracks: List<MusicTrack>, index: Int) {
@@ -1607,6 +1623,7 @@ class MainActivity : Activity() {
     }
 
     private fun showNowPlaying() {
+        setAppChromeVisible(false)
         if (activeDestination != DEST_NOW_PLAYING) returnDestination = activeDestination
         activeDestination = DEST_NOW_PLAYING
         updateNavigationState()
@@ -1623,7 +1640,7 @@ class MainActivity : Activity() {
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(24), dp(12), dp(24), dp(26))
+            setPadding(dp(26), dp(20), dp(26), dp(34))
         }
         val topBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         topBar.addView(iconControl(R.drawable.ic_back, "Back", 42, Color.rgb(33, 52, 58)) {
@@ -1640,20 +1657,20 @@ class MainActivity : Activity() {
         topBar.addView(topTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         topBar.addView(iconControl(R.drawable.ic_queue, "Playback queue", 42, Color.rgb(33, 52, 58)) { showQueueDialog() },
             LinearLayout.LayoutParams(dp(42), dp(42)))
-        content.addView(topBar, matchWrap().apply { bottomMargin = dp(18) })
+        content.addView(topBar, matchWrap().apply { bottomMargin = dp(26) })
 
-        val artworkSize = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt().minus(56).coerceIn(220, 318)
+        val artworkSize = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt().minus(64).coerceIn(228, 340)
         content.addView(artwork(track, artworkSize, 25), LinearLayout.LayoutParams(dp(artworkSize), dp(artworkSize)).apply {
-            bottomMargin = dp(25)
+            bottomMargin = dp(32)
         })
 
         val infoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val songInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         songInfo.addView(uiText(if (entry != null || track != null) "NOW PLAYING" else "READY TO PLAY", 9f, cAccent, true).apply { letterSpacing = 0.13f })
-        songInfo.addView(uiText(entry?.title ?: track?.title ?: "Choose your music", 23f, cText, true).apply {
+        songInfo.addView(uiText(entry?.title ?: track?.title ?: "Choose your music", 25f, cText, true).apply {
             maxLines = 2; setPadding(0, dp(7), 0, dp(4))
         })
-        songInfo.addView(uiText(entry?.artist ?: track?.artist ?: "Your library is waiting", 13f, cMuted).apply { maxLines = 1 })
+        songInfo.addView(uiText(entry?.artist ?: track?.artist ?: "Your library is waiting", 14f, cMuted).apply { maxLines = 1 })
         infoRow.addView(songInfo, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         if (track != null) {
             val saved = playlistStore.isFavourite(track.id)
@@ -1681,8 +1698,8 @@ class MainActivity : Activity() {
         }
         content.addView(nowPlayingSeekBar, matchWrap())
         val timeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        nowPositionLabel = uiText("0:00", 10f, cMuted)
-        nowDurationLabel = uiText(formatTime(playback?.playbackDurationMs() ?: track?.durationMs ?: 0L), 10f, cMuted)
+        nowPositionLabel = uiText("0:00", 12f, cMuted)
+        nowDurationLabel = uiText(formatTime(playback?.playbackDurationMs() ?: track?.durationMs ?: 0L), 12f, cMuted)
         timeRow.addView(nowPositionLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         timeRow.addView(nowDurationLabel)
         content.addView(timeRow, matchWrap().apply { bottomMargin = dp(17) })
@@ -1699,16 +1716,16 @@ class MainActivity : Activity() {
             text = ""
             setIconResource(if (playback?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play)
             iconTint = ColorStateList.valueOf(Color.rgb(6, 29, 23))
-            iconSize = dp(29)
+            iconSize = dp(32)
             iconPadding = 0
-            cornerRadius = dp(31)
+            cornerRadius = dp(34)
             insetTop = 0; insetBottom = 0
-            minWidth = dp(64); minHeight = dp(64)
+            minWidth = dp(70); minHeight = dp(70)
             backgroundTintList = ColorStateList.valueOf(cAccent)
             elevation = dp(3).toFloat()
             setOnClickListener { togglePlayback(); showNowPlaying() }
         }
-        controls.addView(play, LinearLayout.LayoutParams(dp(64), dp(64)).apply { marginStart = dp(8); marginEnd = dp(8) })
+        controls.addView(play, LinearLayout.LayoutParams(dp(70), dp(70)).apply { marginStart = dp(8); marginEnd = dp(8) })
         controls.addView(iconControl(R.drawable.ic_skip_next, "Next track", 48, Color.TRANSPARENT, cText) {
             playback?.skipToNext(); updateMiniPlayer(); showNowPlaying()
         }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(8) })
@@ -1723,16 +1740,16 @@ class MainActivity : Activity() {
             PlaybackService.REPEAT_ONE -> "Repeat one"
             else -> "Repeat off"
         }
-        content.addView(uiText("${if (playback?.isShuffleEnabled() == true) "Shuffle on" else "Shuffle off"}   ·   $repeatLabel", 10f, cMuted).apply { gravity = Gravity.CENTER })
+        content.addView(uiText("${if (playback?.isShuffleEnabled() == true) "Shuffle on" else "Shuffle off"}   ·   $repeatLabel", 12f, cMuted).apply { gravity = Gravity.CENTER })
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         actions.addView(materialAction("Playback queue", false, true).apply {
             setOnClickListener { showQueueDialog() }
-        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
         actions.addView(materialAction("Sound studio", false, true).apply {
             setOnClickListener { showDsp() }
-        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) })
-        content.addView(actions, matchWrap().apply { topMargin = dp(23) })
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(8) })
+        content.addView(actions, matchWrap().apply { topMargin = dp(30) })
 
         scroll.addView(content)
         page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
