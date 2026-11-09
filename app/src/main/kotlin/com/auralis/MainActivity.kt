@@ -1132,11 +1132,11 @@ class MainActivity : Activity() {
             holder.artist.text = track.artist
             holder.duration.text = track.durationLabel
             bindArtwork(holder.artwork, track.albumArtUri, 52)
+            holder.position = position
             holder.more.setOnClickListener { holder.track?.let { showTrackActions(it) } }
             row.setOnClickListener {
-                val item = holder.track ?: return@setOnClickListener
-                val index = tracks.indexOfFirst { it.id == item.id }
-                if (index >= 0) playTracks(tracks, index)
+                val index = holder.position
+                if (index in tracks.indices) playTracks(tracks, index)
             }
             row.setOnLongClickListener {
                 holder.track?.let { showTrackActions(it) }
@@ -1155,7 +1155,8 @@ class MainActivity : Activity() {
         val artist: TextView,
         val duration: TextView,
         val more: ImageView,
-        var track: MusicTrack? = null
+        var track: MusicTrack? = null,
+        var position: Int = -1
     )
 
     private fun appendLibraryPage(container: LinearLayout) {
@@ -1223,13 +1224,17 @@ class MainActivity : Activity() {
 
     private fun renderLibraryItems(countLabel: TextView? = null) {
         val container = libraryListContainer ?: return
-        container.removeAllViews()
+        val collectionScroll = libraryCollectionScroll ?: return
+        val trackList = libraryListView ?: return
+        val adapter = libraryTrackAdapter ?: return
+
         libraryRenderedCount = 0
         libraryPageTracks = emptyList()
         libraryCollectionItems = emptyList()
         libraryCollectionRenderedCount = 0
 
         val query = currentSearch.trim()
+        val queryKey = query.lowercase()
         val tab = currentLibraryTab
         val sort = currentSort
         val album = currentAlbum
@@ -1237,22 +1242,15 @@ class MainActivity : Activity() {
         val playlist = currentPlaylist
         val searchMode = isSearchPage
         val sourceTracks = librarySnapshot
-        val favourites = if (tab == LIBRARY_FAVOURITES || tab == LIBRARY_PLAYLISTS ||
-            playlist == PlaylistStore.FAVOURITES_NAME) {
-            playlistStore.favourites()
-        } else emptySet()
-        val playlistIds = if (tab == LIBRARY_PLAYLISTS && playlist != null) {
-            playlistStore.trackIds(playlist).toHashSet()
-        } else emptySet()
-        val playlistNames = if (tab == LIBRARY_PLAYLISTS && playlist == null) {
-            playlistStore.playlists()
-        } else emptyList()
         val generation = ++libraryQueryGeneration
 
-        // Do not populate Search with dozens of rows before the user has typed.
+        // A blank Search page stays lightweight and does not construct song rows.
         if (searchMode && query.isBlank()) {
             pendingLibraryQuery?.cancel(true)
             countLabel?.text = "Search your music"
+            container.removeAllViews()
+            collectionScroll.visibility = View.VISIBLE
+            trackList.visibility = View.GONE
             val prompt = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
@@ -1276,16 +1274,31 @@ class MainActivity : Activity() {
             return
         }
 
+        // Keep the previous visible rows until the new query is ready. Search never clears
+        // and reconstructs the list for each keystroke.
         pendingLibraryQuery?.cancel(true)
         pendingLibraryQuery = libraryQueryExecutor.submit {
             fun interrupted() = Thread.currentThread().isInterrupted
-            fun matches(value: String): Boolean = query.isBlank() || value.contains(query, ignoreCase = true)
+            fun matches(value: String): Boolean = queryKey.isBlank() || value.contains(queryKey)
+
+            val favourites = if (tab == LIBRARY_FAVOURITES || tab == LIBRARY_PLAYLISTS ||
+                playlist == PlaylistStore.FAVOURITES_NAME) {
+                playlistStore.favourites()
+            } else emptySet()
+
+            val playlistIds = if (tab == LIBRARY_PLAYLISTS && playlist != null) {
+                playlistStore.trackIds(playlist).toHashSet()
+            } else emptySet()
+
+            val playlistNames = if (tab == LIBRARY_PLAYLISTS && playlist == null) {
+                playlistStore.playlists()
+            } else emptyList()
 
             val collections = when {
                 tab == LIBRARY_ALBUMS && album == null -> sourceTracks
                     .groupBy { it.album to it.artist }
                     .mapNotNull { (key, tracks) ->
-                        if (interrupted() || (!matches(key.first) && !matches(key.second))) null
+                        if (interrupted() || (!matches(key.first.lowercase()) && !matches(key.second.lowercase()))) null
                         else LibraryCollectionEntry(
                             key.first, key.second, "${tracks.size} tracks",
                             tracks.maxByOrNull { it.dateAddedSeconds }
@@ -1296,7 +1309,7 @@ class MainActivity : Activity() {
                 tab == LIBRARY_ARTISTS && artist == null -> sourceTracks
                     .groupBy { it.artist }
                     .mapNotNull { (name, tracks) ->
-                        if (interrupted() || !matches(name)) null
+                        if (interrupted() || !matches(name.lowercase())) null
                         else LibraryCollectionEntry(
                             name, "Artist", "${tracks.size} tracks",
                             tracks.maxByOrNull { it.dateAddedSeconds }
@@ -1324,8 +1337,11 @@ class MainActivity : Activity() {
 
             if (interrupted()) return@submit
 
-            val filtered = if (collections.isNotEmpty() || tab == LIBRARY_PLAYLISTS && playlist == null ||
-                tab == LIBRARY_ALBUMS && album == null || tab == LIBRARY_ARTISTS && artist == null) {
+            val isCollectionPage = (tab == LIBRARY_ALBUMS && album == null) ||
+                (tab == LIBRARY_ARTISTS && artist == null) ||
+                (tab == LIBRARY_PLAYLISTS && playlist == null)
+
+            val filtered = if (isCollectionPage) {
                 emptyList()
             } else {
                 val selectedIds = when (tab) {
@@ -1339,15 +1355,17 @@ class MainActivity : Activity() {
                     if (selectedIds != null && track.id !in selectedIds) continue
                     if (album != null && track.album != album) continue
                     if (artist != null && track.artist != artist) continue
-                    if (query.isNotBlank() &&
-                        !matches(track.title) && !matches(track.artist) && !matches(track.album)) continue
+                    if (queryKey.isNotBlank()) {
+                        val searchable = librarySearchIndex[track.id]
+                        if (searchable == null || !searchable.contains(queryKey)) continue
+                    }
                     result.add(track)
                 }
                 when (sort) {
                     SORT_ARTIST -> result.sortWith(compareBy<MusicTrack> { it.artist.lowercase() }.thenBy { it.title.lowercase() })
                     SORT_ALBUM -> result.sortWith(compareBy<MusicTrack> { it.album.lowercase() }.thenBy { it.title.lowercase() })
                     SORT_RECENT -> result.sortByDescending { it.dateAddedSeconds }
-                    // MediaStore already provides title order, so the default path needs no sort.
+                    // The library snapshot is already in title order for the default path.
                 }
                 result
             }
@@ -1356,35 +1374,36 @@ class MainActivity : Activity() {
 
             runOnUiThread {
                 if (generation != libraryQueryGeneration || isFinishing || isDestroyed ||
-                    libraryListContainer !== container) return@runOnUiThread
+                    libraryListContainer !== container || libraryListView !== trackList) return@runOnUiThread
 
                 displayedTracks = filtered
                 libraryPageTracks = filtered
+                libraryCollectionItems = collections
 
                 countLabel?.text = when {
-                    collections.isNotEmpty() -> "${collections.size} ${if (tab == LIBRARY_ARTISTS) "artists" else if (tab == LIBRARY_PLAYLISTS) "playlists" else "albums"}"
-                    tab == LIBRARY_ALBUMS && album == null -> "${collections.size} albums"
-                    tab == LIBRARY_ARTISTS && artist == null -> "${collections.size} artists"
+                    isCollectionPage -> "${collections.size} ${if (tab == LIBRARY_ARTISTS) "artists" else if (tab == LIBRARY_PLAYLISTS) "playlists" else "albums"}"
                     tab == LIBRARY_PLAYLISTS && playlist != null -> "${filtered.size} tracks"
                     else -> "${filtered.size} songs"
                 }
 
+                container.removeAllViews()
                 when {
-                    tab == LIBRARY_ALBUMS && album == null ||
-                        tab == LIBRARY_ARTISTS && artist == null ||
-                        tab == LIBRARY_PLAYLISTS && playlist == null -> {
+                    isCollectionPage -> {
+                        collectionScroll.visibility = View.VISIBLE
+                        trackList.visibility = View.GONE
                         if (collections.isEmpty()) {
                             container.addView(uiText("No matching collections found.", 13f, cMuted).apply {
                                 gravity = Gravity.CENTER
                                 setPadding(dp(20), dp(34), dp(20), dp(34))
                             }, matchWrap())
                         } else {
-                            libraryCollectionItems = collections
                             appendLibraryCollectionPage(container, tab)
                         }
                     }
 
                     filtered.isEmpty() -> {
+                        collectionScroll.visibility = View.VISIBLE
+                        trackList.visibility = View.GONE
                         container.addView(uiText(
                             if (sourceTracks.isEmpty()) "No music found yet. Add audio to your device or use OPEN FILE."
                             else "No matching tracks. Try another search or category.",
@@ -1395,7 +1414,12 @@ class MainActivity : Activity() {
                         }, matchWrap())
                     }
 
-                    else -> appendLibraryPage(container)
+                    else -> {
+                        collectionScroll.visibility = View.GONE
+                        trackList.visibility = View.VISIBLE
+                        adapter.submit(filtered)
+                        trackList.setSelection(0)
+                    }
                 }
             }
         }
