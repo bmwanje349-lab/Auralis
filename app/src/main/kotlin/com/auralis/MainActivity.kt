@@ -263,6 +263,17 @@ class MainActivity : Activity() {
         image.scaleType = ImageView.ScaleType.CENTER_INSIDE
     }
 
+    private fun artworkThumbnail(track: MusicTrack?, size: Int, radius: Int = 12): ImageView =
+        ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(38, 91, 83), Color.rgb(48, 58, 89), Color.rgb(30, 40, 54))).apply {
+                cornerRadius = dp(radius).toFloat()
+            }
+            clipToOutline = true
+            bindArtwork(this, track?.albumArtUri, size)
+        }
+
     /**
      * Album art is decoded away from the main thread and cached. The URI tag prevents
      * a slow image request from replacing artwork after a view has been rebound.
@@ -543,7 +554,7 @@ class MainActivity : Activity() {
         if (albumGroups.isNotEmpty()) {
             sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary() })
             val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            albumGroups.take(12).forEach { track ->
+            albumGroups.take(8).forEach { track ->
                 val albumCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     isClickable = true
@@ -570,7 +581,7 @@ class MainActivity : Activity() {
             empty.addView(emptyContent)
             content.addView(empty, matchWrap())
         } else {
-            val latest = homeRecentTracks.take(6)
+            val latest = homeRecentTracks.take(4)
             latest.forEachIndexed { index, track -> addTrackRow(content, track, latest, index) }
         }
 
@@ -1248,28 +1259,46 @@ class MainActivity : Activity() {
     }
 
     private fun addTrackRow(parent: LinearLayout, track: MusicTrack, queueTracks: List<MusicTrack>, index: Int) {
-        val row = roundedCard(cSurface, 17).apply {
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { playTracks(queueTracks, index) }
-        }
-        val content = LinearLayout(this).apply {
+        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(9), dp(9), dp(8), dp(9))
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(3), dp(6), dp(3), dp(6))
+            setOnClickListener { playTracks(queueTracks, index) }
         }
-        content.addView(artwork(track, 54, 12), LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(11) })
+        row.addView(artworkThumbnail(track, 52, 11),
+            LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(11) })
+
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         info.addView(uiText(track.title, 13f, cText, true).apply { maxLines = 1 })
-        info.addView(uiText(track.artist, 10.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) })
-        content.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        content.addView(uiText(track.durationLabel, 10f, cMuted).apply { setPadding(dp(4), 0, dp(2), 0) })
-        content.addView(iconControl(R.drawable.ic_more, "More actions for ${track.title}", 38, Color.TRANSPARENT, cMuted) {
-            showTrackActions(track)
-        }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginStart = dp(5) })
-        row.addView(content)
+        info.addView(uiText(track.artist, 10.5f, cMuted).apply {
+            maxLines = 1
+            setPadding(0, dp(4), 0, 0)
+        })
+        row.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(uiText(track.durationLabel, 10f, cMuted).apply {
+            setPadding(dp(4), 0, dp(2), 0)
+        })
+
+        val more = ImageView(this).apply {
+            setImageResource(R.drawable.ic_more)
+            imageTintList = ColorStateList.valueOf(cMuted)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = "More actions for ${track.title}"
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            setOnClickListener { showTrackActions(track) }
+        }
+        row.addView(more, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(4) })
         row.setOnLongClickListener { showTrackActions(track); true }
-        parent.addView(row, matchWrap().apply { topMargin = dp(6) })
+        parent.addView(row, matchWrap().apply { topMargin = dp(2) })
+
+        val divider = View(this).apply { setBackgroundColor(cBorder) }
+        parent.addView(divider, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1)
+        ).apply { leftMargin = dp(64) })
     }
 
     private fun playTracks(tracks: List<MusicTrack>, index: Int) {
@@ -1835,7 +1864,7 @@ class MainActivity : Activity() {
         private const val SORT_ALBUM = "Album"
         private const val SORT_RECENT = "Recently added"
         private const val MAX_EQ_BANDS = 64
-        private const val LIBRARY_PAGE_SIZE = 18
+        private const val LIBRARY_PAGE_SIZE = 12
         private const val NO_ARTWORK_TAG = "auralis:no-artwork"
         private val FILTER_LABELS = arrayOf(
             "Low-pass (0)", "High-pass (1)", "Band-pass (2)",
