@@ -132,6 +132,8 @@ class MainActivity : Activity() {
     private var pendingSearchRender: Runnable? = null
     private var libraryPageTracks: List<MusicTrack> = emptyList()
     private var libraryRenderedCount = 0
+    private var libraryCollectionItems: List<LibraryCollectionEntry> = emptyList()
+    private var libraryCollectionRenderedCount = 0
 
 
     private val connection = object : ServiceConnection {
@@ -1040,11 +1042,52 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun appendLibraryCollectionPage(container: LinearLayout, tab: String) {
+        val start = libraryCollectionRenderedCount
+        val end = (start + LIBRARY_COLLECTION_PAGE_SIZE).coerceAtMost(libraryCollectionItems.size)
+        if (start >= end) return
+
+        for (index in start until end) {
+            val item = libraryCollectionItems[index]
+            addLibraryCollectionRow(container, item.title, item.subtitle, item.trailing, item.track) {
+                when (tab) {
+                    LIBRARY_ALBUMS -> { currentAlbum = item.title; currentArtist = null }
+                    LIBRARY_ARTISTS -> { currentArtist = item.title; currentAlbum = null }
+                    LIBRARY_PLAYLISTS -> currentPlaylist = item.title
+                }
+                showLibrary()
+            }
+        }
+        libraryCollectionRenderedCount = end
+
+        if (tab == LIBRARY_PLAYLISTS) {
+            val create = materialAction("+ Create playlist", false, true).apply {
+                setOnClickListener { showCreatePlaylistDialog() }
+            }
+            container.addView(create, matchWrap().apply { topMargin = dp(10) })
+        }
+
+        if (end < libraryCollectionItems.size) {
+            val remaining = libraryCollectionItems.size - end
+            val nextCount = minOf(LIBRARY_COLLECTION_PAGE_SIZE, remaining)
+            val more = materialAction("Load next $nextCount collections  ·  $remaining remaining", false, true)
+            more.setOnClickListener {
+                container.removeView(more)
+                appendLibraryCollectionPage(container, tab)
+            }
+            container.addView(more, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)
+            ).apply { topMargin = dp(12); bottomMargin = dp(12) })
+        }
+    }
+
     private fun renderLibraryItems(countLabel: TextView? = null) {
         val container = libraryListContainer ?: return
         container.removeAllViews()
         libraryRenderedCount = 0
         libraryPageTracks = emptyList()
+        libraryCollectionItems = emptyList()
+        libraryCollectionRenderedCount = 0
 
         val query = currentSearch.trim()
         val tab = currentLibraryTab
@@ -1196,21 +1239,8 @@ class MainActivity : Activity() {
                                 setPadding(dp(20), dp(34), dp(20), dp(34))
                             }, matchWrap())
                         } else {
-                            collections.forEach { item ->
-                                addLibraryCollectionRow(container, item.title, item.subtitle, item.trailing, item.track) {
-                                    when (tab) {
-                                        LIBRARY_ALBUMS -> { currentAlbum = item.title; currentArtist = null }
-                                        LIBRARY_ARTISTS -> { currentArtist = item.title; currentAlbum = null }
-                                        LIBRARY_PLAYLISTS -> currentPlaylist = item.title
-                                    }
-                                    showLibrary()
-                                }
-                            }
-                            if (tab == LIBRARY_PLAYLISTS) {
-                                container.addView(materialAction("+ Create playlist", false, true).apply {
-                                    setOnClickListener { showCreatePlaylistDialog() }
-                                }, matchWrap().apply { topMargin = dp(10) })
-                            }
+                            libraryCollectionItems = collections
+                            appendLibraryCollectionPage(container, tab)
                         }
                     }
 
@@ -1867,6 +1897,7 @@ class MainActivity : Activity() {
         private const val SORT_RECENT = "Recently added"
         private const val MAX_EQ_BANDS = 64
         private const val LIBRARY_PAGE_SIZE = 12
+        private const val LIBRARY_COLLECTION_PAGE_SIZE = 16
         private const val NO_ARTWORK_TAG = "auralis:no-artwork"
         private val FILTER_LABELS = arrayOf(
             "Low-pass (0)", "High-pass (1)", "Band-pass (2)",
