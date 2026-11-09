@@ -283,7 +283,8 @@ class MainActivity : Activity() {
         artworkExecutor.execute {
             val bitmap = runCatching {
                 if (Build.VERSION.SDK_INT >= 29) {
-                    contentResolver.loadThumbnail(uri, Size(targetPx, targetPx), null)
+                    runCatching { contentResolver.loadThumbnail(uri, Size(targetPx, targetPx), null) }
+                        .getOrNull() ?: decodeLegacyArtwork(uri, targetPx)
                 } else {
                     decodeLegacyArtwork(uri, targetPx)
                 }
