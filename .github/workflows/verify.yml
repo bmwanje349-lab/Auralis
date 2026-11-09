@@ -53,8 +53,8 @@ jobs:
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Verify Auralis version metadata
         run: |
-          grep -q "versionCode 6" auralis/app/build.gradle
-          grep -q "versionName '1.2.3'" auralis/app/build.gradle
+          grep -q "versionCode 7" auralis/app/build.gradle
+          grep -q "versionName '1.2.4'" auralis/app/build.gradle
       - name: Install Gradle distribution
         run: |
           curl --retry 3 --retry-delay 2 -fsSL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
@@ -72,10 +72,10 @@ jobs:
           test -s "$APK"
           sha256sum "$APK" | tee auralis/AURALIS-SHA256SUMS.txt
           cat > auralis/AURALIS-BUILD-INFO.txt <<INFO
-          Auralis 1.2.3 instant navigation and search
+          Auralis 1.2.4 premium layout refinement
           Source: ${GITHUB_SHA}
           Application ID: com.auralis
-          Version: 1.2.3 (versionCode 6)
+          Version: 1.2.4 (versionCode 7)
           Variant: debug
           Build task: assembleDebug
           Test task: testDebugUnitTest
@@ -83,7 +83,7 @@ jobs:
       - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: auralis-1.2.3-instant-ui-debug-${{ github.sha }}
+          name: auralis-1.2.4-premium-ui-debug-${{ github.sha }}
           path: |
             auralis/app/build/outputs/apk/debug/app-debug.apk
             auralis/AURALIS-BUILD-INFO.txt
