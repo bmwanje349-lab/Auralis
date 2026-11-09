@@ -607,14 +607,14 @@ class MainActivity : Activity() {
 
         val albumGroups = homeAlbumTracks
         if (albumGroups.isNotEmpty()) {
-            sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary() })
+            sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary(refreshContent = true) })
             val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             albumGroups.take(8).forEach { track ->
                 val albumCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     isClickable = true
                     isFocusable = true
-                    setOnClickListener { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = track.album; showLibrary() }
+                    setOnClickListener { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = track.album; showLibrary(refreshContent = true) }
                 }
                 albumCard.addView(artwork(track, 138, 17), LinearLayout.LayoutParams(dp(138), dp(138)))
                 albumCard.addView(uiText(track.album, 12.5f, cText, true).apply { maxLines = 1; setPadding(0, dp(8), 0, dp(3)) })
@@ -889,6 +889,9 @@ class MainActivity : Activity() {
             }
             val byUri = loaded.associateBy { it.uri }
             val indexById = loaded.withIndex().associate { it.value.id to it.index }
+            val searchIndex = loaded.associate { track ->
+                track.id to "${track.title} ${track.artist} ${track.album}".lowercase()
+            }
             val recent = loaded.sortedByDescending { it.dateAddedSeconds }
             val albums = loaded.groupBy { it.album to it.artist }.values
                 .mapNotNull { group -> group.maxByOrNull { it.dateAddedSeconds } }
@@ -899,13 +902,14 @@ class MainActivity : Activity() {
                 librarySnapshot = loaded
                 libraryTrackByUri = byUri
                 libraryIndexById = indexById
+                librarySearchIndex = searchIndex
                 homeRecentTracks = recent
                 homeAlbumTracks = albums
                 if (::contentFrame.isInitialized) {
                     when (activeDestination) {
-                        DEST_HOME -> showHome()
-                        DEST_SEARCH -> showSearch()
-                        DEST_LIBRARY -> showLibrary()
+                        DEST_HOME -> showHome(refreshContent = true)
+                        DEST_SEARCH -> showSearch(refreshContent = true)
+                        DEST_LIBRARY -> showLibrary(refreshContent = true)
                         DEST_NOW_PLAYING -> showNowPlaying()
                         else -> Unit
                     }
@@ -1000,7 +1004,7 @@ class MainActivity : Activity() {
                     if (currentLibraryTab != tab) {
                         currentLibraryTab = tab
                         currentAlbum = null; currentArtist = null; currentPlaylist = null
-                        if (searchMode) showSearch() else showLibrary()
+                        if (searchMode) showSearch(refreshContent = true) else showLibrary(refreshContent = true)
                     }
                 }
             }
@@ -1022,7 +1026,7 @@ class MainActivity : Activity() {
                 minHeight = dp(34)
                 backgroundTintList = ColorStateList.valueOf(cSurface)
                 setTextColor(cAccent)
-                setOnClickListener { currentAlbum = null; currentArtist = null; currentPlaylist = null; if (searchMode) showSearch() else showLibrary() }
+                setOnClickListener { currentAlbum = null; currentArtist = null; currentPlaylist = null; if (searchMode) showSearch(refreshContent = true) else showLibrary(refreshContent = true) }
             }
             page.addView(back, matchWrap().apply { bottomMargin = dp(5) })
         }
@@ -1243,7 +1247,7 @@ class MainActivity : Activity() {
                     LIBRARY_ARTISTS -> { currentArtist = item.title; currentAlbum = null }
                     LIBRARY_PLAYLISTS -> currentPlaylist = item.title
                 }
-                showLibrary()
+                showLibrary(refreshContent = true)
             }
         }
         libraryCollectionRenderedCount = end
@@ -1586,7 +1590,7 @@ class MainActivity : Activity() {
                 if (playlistStore.createPlaylist(input.text.toString())) {
                     currentPlaylist = input.text.toString().trim()
                     currentLibraryTab = LIBRARY_PLAYLISTS
-                    showLibrary()
+                    showLibrary(refreshContent = true)
                 } else Toast.makeText(this, "Enter a new playlist name", Toast.LENGTH_SHORT).show()
             }.show()
     }
