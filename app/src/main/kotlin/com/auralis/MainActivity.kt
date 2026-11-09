@@ -157,7 +157,7 @@ class MainActivity : Activity() {
 
     private fun roundedCard(backgroundColor: Int = cSurface, radius: Int = 22): MaterialCardView =
         MaterialCardView(this).apply {
-            radius = dp(radius).toFloat()
+            setRadius(dp(radius).toFloat())
             cardElevation = 0f
             strokeWidth = dp(1)
             strokeColor = cBorder
@@ -406,8 +406,7 @@ class MainActivity : Activity() {
             setPadding(dp(20), dp(17), dp(20), dp(28))
         }
         content.addView(uiText("YOUR MUSIC", 10f, cAccent, true).apply { letterSpacing = 0.18f })
-        content.addView(uiText("Find your next
-favourite.", 30f, cText, true).apply {
+        content.addView(uiText("Find your next\nfavourite.", 30f, cText, true).apply {
             setPadding(0, dp(8), 0, dp(7)); setLineSpacing(dp(1).toFloat(), 1.0f)
         })
         content.addView(uiText("A personal space for the music you love.", 13f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
