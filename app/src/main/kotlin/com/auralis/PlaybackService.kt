@@ -29,6 +29,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executors
 import kotlin.math.max
 
 /** Playback is split into decoder, native DSP, and output threads. */
@@ -38,6 +39,9 @@ class PlaybackService : Service() {
     private val binder = LocalBinder()
     // Serializes configuration producers only; the native DSP consumer never takes this lock.
     private val configLock = Any()
+    private val cleanupExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Auralis-cleanup").apply { isDaemon = true }
+    }
     private val sessionLock = Any()
     private val queueLock = Any()
     private val queue = ArrayList<QueueEntry>()
@@ -288,6 +292,7 @@ class PlaybackService : Service() {
         var codec: MediaCodec? = null
         try {
             extractor = MediaExtractor()
+            s.extractor = extractor
             extractor.setDataSource(this, s.uri, null)
             var selectedTrack = -1
             var sourceFormat: MediaFormat? = null
@@ -311,14 +316,14 @@ class PlaybackService : Service() {
             if (channels > 2) throw IOException("This stereo DSP path accepts mono or stereo input only")
 
             codec = MediaCodec.createDecoderByType(mime)
+            s.codec = codec
             codec.configure(format, null, null, 0)
             codec.start()
-            s.extractor = extractor
-            s.codec = codec
             // Tags are read once per track; the engine keeps them, so later preference changes
             // only need the new settings.
             val replayGainTags = ReplayGainReader.read(this, s.uri) ?: ReplayGainTags()
             val nativeEngine = NativeAudioEngine(sampleRate)
+            s.engine = nativeEngine
             synchronized(configLock) {
                 nativeEngine.setStereoWide(stereoEnabled, stereoPercent)
                 nativeEngine.setBalance(balanceEnabled, balanceNormalized)
@@ -374,12 +379,20 @@ class PlaybackService : Service() {
             }
         } catch (t: Throwable) {
             s.running.set(false)
-            try { codec?.stop() } catch (_: Throwable) { }
-            try { codec?.release() } catch (_: Throwable) { }
-            try { extractor?.release() } catch (_: Throwable) { }
-            try { s.audioTrack?.release() } catch (_: Throwable) { }
-            s.engine?.close()
-            if (session === s) updateNotification("Unable to play this audio")
+            try { s.audioTrack?.pause(); s.audioTrack?.stop() } catch (_: Throwable) { }
+            val failedCurrent = synchronized(sessionLock) {
+                if (session === s) {
+                    session = null
+                    true
+                } else false
+            }
+            if (failedCurrent) {
+                releaseWakeLock()
+                abandonAudioFocus()
+                updatePlaybackState(PlaybackState.STATE_STOPPED)
+                updateNotification("Unable to play this audio")
+            }
+            scheduleSessionCleanup(s)
         }
     }
 
@@ -567,20 +580,62 @@ class PlaybackService : Service() {
             current?.running?.set(false)
             current
         } ?: return
+
         try { old.audioTrack?.pause(); old.audioTrack?.stop() } catch (_: Throwable) { }
-        listOf(old.prepareThread, old.decoderThread, old.dspThread, old.outputThread).forEach { thread ->
-            if (thread != null && thread !== Thread.currentThread()) {
-                try { thread.join(1200) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
-            }
-        }
-        try { old.audioTrack?.release() } catch (_: Throwable) { }
-        try { old.codec?.release() } catch (_: Throwable) { }
-        try { old.extractor?.release() } catch (_: Throwable) { }
-        old.engine?.close()
         releaseWakeLock()
         abandonAudioFocus()
         updatePlaybackState(PlaybackState.STATE_STOPPED)
         updateNotification("Auralis is ready")
+        scheduleSessionCleanup(old)
+    }
+
+    /**
+     * Decoder shutdown and resource release happen off the main thread. Track changes
+     * must never wait synchronously for codec, DSP, or AudioTrack workers to exit.
+     */
+    private fun scheduleSessionCleanup(old: PlaybackSession) {
+        if (!old.cleanupQueued.compareAndSet(false, true)) return
+        val cleanup = Runnable {
+            val complete = cleanupSession(old)
+            old.cleanupQueued.set(false)
+            if (!complete) scheduleSessionCleanup(old)
+        }
+        try {
+            cleanupExecutor.execute(cleanup)
+        } catch (_: Throwable) {
+            Thread({
+                while (!cleanupSession(old)) {
+                    try { Thread.sleep(100) } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+                old.cleanupQueued.set(false)
+            }, "Auralis-cleanup-fallback").apply { isDaemon = true; start() }
+        }
+    }
+
+    private fun cleanupSession(old: PlaybackSession): Boolean {
+        val threads = listOf(old.prepareThread, old.decoderThread, old.dspThread, old.outputThread)
+        threads.forEach { thread ->
+            if (thread != null && thread !== Thread.currentThread() && thread.isAlive) {
+                try { thread.join(1200) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+        }
+        if (threads.any { it != null && it !== Thread.currentThread() && it.isAlive }) return false
+
+        if (old.resourcesReleased.compareAndSet(false, true)) {
+            try { old.audioTrack?.pause(); old.audioTrack?.flush(); old.audioTrack?.stop() } catch (_: Throwable) { }
+            try { old.audioTrack?.release() } catch (_: Throwable) { }
+            try { old.codec?.stop() } catch (_: Throwable) { }
+            try { old.codec?.release() } catch (_: Throwable) { }
+            try { old.extractor?.release() } catch (_: Throwable) { }
+            try { old.engine?.close() } catch (_: Throwable) { }
+        }
+        return true
     }
 
     private fun startQueueEntry(index: Int, positionMs: Long, autoPlay: Boolean = true) {
@@ -757,6 +812,7 @@ class PlaybackService : Service() {
         mediaSession?.release()
         mediaSession = null
         stopForeground(STOP_FOREGROUND_REMOVE)
+        cleanupExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -772,6 +828,8 @@ class PlaybackService : Service() {
         val running = AtomicBoolean(false)
         val decoderDone = AtomicBoolean(false)
         val dspDone = AtomicBoolean(false)
+        val cleanupQueued = AtomicBoolean(false)
+        val resourcesReleased = AtomicBoolean(false)
         @Volatile var prepareThread: Thread? = null
         @Volatile var extractor: MediaExtractor? = null
         @Volatile var codec: MediaCodec? = null
