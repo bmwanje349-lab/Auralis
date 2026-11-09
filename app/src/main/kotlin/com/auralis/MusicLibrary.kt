@@ -120,6 +120,35 @@ internal class PlaylistStore(context: Context) {
         return buildList { for (i in 0 until array.length()) add(array.optLong(i, -1L)) }.filter { it >= 0L }
     }
 
+    fun removeFromPlaylist(name: String, trackId: Long): Boolean {
+        if (name == FAVOURITES_NAME) {
+            if (!isFavourite(trackId)) return false
+            toggleFavourite(trackId)
+            return true
+        }
+        val objectValue = playlistObject()
+        val array = objectValue.optJSONArray(name) ?: return false
+        val kept = JSONArray()
+        var removed = false
+        for (i in 0 until array.length()) {
+            val value = array.optLong(i, -1L)
+            if (value == trackId) removed = true else kept.put(value)
+        }
+        if (removed) {
+            objectValue.put(name, kept)
+            savePlaylists(objectValue)
+        }
+        return removed
+    }
+
+    fun deletePlaylist(name: String): Boolean {
+        val objectValue = playlistObject()
+        if (!objectValue.has(name)) return false
+        objectValue.remove(name)
+        savePlaylists(objectValue)
+        return true
+    }
+
     private fun playlistObject(): JSONObject = runCatching {
         JSONObject(prefs.getString(KEY_PLAYLISTS, "{}") ?: "{}")
     }.getOrDefault(JSONObject())
@@ -133,4 +162,25 @@ internal class PlaylistStore(context: Context) {
         private const val KEY_FAVOURITES = "favourites"
         private const val KEY_PLAYLISTS = "playlists"
     }
+}
+
+/** Most-recently-played track URIs, newest first. */
+internal object PlayHistory {
+    private const val PREFS = "auralis.history"
+    private const val KEY = "recent"
+    private const val LIMIT = 40
+
+    fun record(context: Context, uri: Uri) {
+        val value = uri.toString()
+        val list = recent(context).toMutableList()
+        list.remove(value)
+        list.add(0, value)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY, JSONArray(list.take(LIMIT)).toString()).apply()
+    }
+
+    fun recent(context: Context): List<String> = runCatching {
+        val array = JSONArray(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, "[]") ?: "[]")
+        List(array.length()) { array.getString(it) }
+    }.getOrDefault(emptyList())
 }

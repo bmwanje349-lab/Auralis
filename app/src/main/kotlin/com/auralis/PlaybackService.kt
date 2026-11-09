@@ -167,11 +167,109 @@ class PlaybackService : Service() {
             wasEmpty
         }
         if (shouldStart) startQueueEntry(0, 0L)
-        else updateNotification("Added to queue")
+        else { updateNotification("Added to queue"); persistSession() }
+    }
+
+    private val persistExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Auralis-persist").apply { isDaemon = true }
+    }
+
+    /** Saves the queue and position so the app can resume where the listener left off. */
+    private fun persistSession(positionMs: Long = playbackPositionMs()) {
+        val (items, index) = synchronized(queueLock) { queue.toList() to queueIndex }
+        val shuffle = shuffleEnabled
+        val repeat = repeatMode
+        runCatching {
+            persistExecutor.execute {
+                runCatching {
+                    val prefs = getSharedPreferences("auralis.session", Context.MODE_PRIVATE)
+                    val current = items.getOrNull(index)
+                    if (current == null || current.uri.authority != "media") {
+                        prefs.edit().clear().apply()
+                        return@runCatching
+                    }
+                    val media = items.filter { it.uri.authority == "media" }
+                    val mediaIndex = items.subList(0, index).count { it.uri.authority == "media" }
+                    val from = (mediaIndex - 20).coerceAtLeast(0)
+                    val window = media.drop(from).take(1500)
+                    val array = org.json.JSONArray()
+                    window.forEach { e ->
+                        array.put(org.json.JSONObject().put("uri", e.uri.toString()).put("title", e.title)
+                            .put("artist", e.artist).put("album", e.album).put("duration", e.durationMs))
+                    }
+                    prefs.edit().putString("queue", array.toString()).putInt("index", mediaIndex - from)
+                        .putLong("position", positionMs).putBoolean("shuffle", shuffle).putInt("repeat", repeat).apply()
+                }
+            }
+        }
+    }
+
+    /** Restores the saved queue paused at the saved position; returns false if there is nothing to restore. */
+    fun restoreSession(): Boolean {
+        if (synchronized(queueLock) { queue.isNotEmpty() }) return false
+        val prefs = getSharedPreferences("auralis.session", Context.MODE_PRIVATE)
+        val raw = prefs.getString("queue", null) ?: return false
+        val entries = runCatching {
+            val array = org.json.JSONArray(raw)
+            (0 until array.length()).map { i ->
+                val o = array.getJSONObject(i)
+                QueueEntry(Uri.parse(o.getString("uri")), o.getString("title"), o.getString("artist"),
+                    o.getString("album"), o.optLong("duration", 0L))
+            }
+        }.getOrNull()
+        if (entries.isNullOrEmpty()) return false
+        val index = prefs.getInt("index", 0).coerceIn(0, entries.lastIndex)
+        synchronized(queueLock) {
+            queue.clear()
+            queue.addAll(entries)
+            queueIndex = index
+        }
+        shuffleEnabled = prefs.getBoolean("shuffle", false)
+        repeatMode = prefs.getInt("repeat", REPEAT_OFF).coerceIn(REPEAT_OFF, REPEAT_ONE)
+        startQueueEntry(index, prefs.getLong("position", 0L), false)
+        return true
+    }
+
+    fun removeFromQueue(index: Int) {
+        var restartAt = -1
+        var emptied = false
+        synchronized(queueLock) {
+            if (index !in queue.indices) return
+            queue.removeAt(index)
+            when {
+                queue.isEmpty() -> { queueIndex = -1; emptied = true }
+                index < queueIndex -> queueIndex--
+                index == queueIndex -> { queueIndex = index.coerceAtMost(queue.lastIndex); restartAt = queueIndex }
+                else -> Unit
+            }
+        }
+        if (emptied) {
+            stopCurrent()
+            updateNotification("Queue cleared")
+        } else if (restartAt >= 0) {
+            startQueueEntry(restartAt, 0L, isPlaying())
+        }
+        persistSession()
+    }
+
+    fun moveQueueItem(from: Int, to: Int) {
+        synchronized(queueLock) {
+            if (from !in queue.indices || to !in queue.indices || from == to) return
+            val item = queue.removeAt(from)
+            queue.add(to, item)
+            queueIndex = when {
+                queueIndex == from -> to
+                from < queueIndex && to >= queueIndex -> queueIndex - 1
+                from > queueIndex && to <= queueIndex -> queueIndex + 1
+                else -> queueIndex
+            }
+        }
+        persistSession()
     }
 
     fun pausePlayback() {
         session?.audioTrack?.pause()
+        persistSession()
         releaseWakeLock()
         updatePlaybackState(PlaybackState.STATE_PAUSED)
         updateNotification("Paused")
@@ -243,6 +341,7 @@ class PlaybackService : Service() {
     fun clearQueue() {
         synchronized(queueLock) { queue.clear(); queueIndex = -1 }
         stopCurrent()
+        persistSession()
         updateNotification("Queue cleared")
     }
     fun isPlaying(): Boolean = session?.audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING
@@ -694,6 +793,8 @@ class PlaybackService : Service() {
             thread.start()
         }
         updateNowPlaying(entry)
+        persistSession(positionMs.coerceAtLeast(0L))
+        if (autoPlay) PlayHistory.record(this, entry.uri)
     }
 
     private fun advanceQueue(userInitiated: Boolean) {
@@ -853,12 +954,14 @@ class PlaybackService : Service() {
             runCatching { unregisterReceiver(noisyReceiver) }
             noisyReceiverRegistered = false
         }
+        persistSession()
         stopCurrent()
         mediaSession?.isActive = false
         mediaSession?.release()
         mediaSession = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         cleanupExecutor.shutdown()
+        persistExecutor.shutdown()
         super.onDestroy()
     }
 

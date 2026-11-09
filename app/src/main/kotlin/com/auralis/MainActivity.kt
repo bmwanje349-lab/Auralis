@@ -151,8 +151,10 @@ class MainActivity : Activity() {
             playback = (service as? PlaybackService.LocalBinder)?.service()
             bound = playback != null
             if (::status.isInitialized) status.text = if (bound) "Audio engine connected" else "Audio engine unavailable"
+            val hadPendingRequest = pendingUri != null || pendingQueue != null
             pendingUri?.let { playback?.load(it); pendingUri = null }
             pendingQueue?.let { (tracks, index) -> playback?.playQueue(tracks, index); pendingQueue = null }
+            if (!hadPendingRequest) playback?.restoreSession()
             if (::reverbToggle.isInitialized) syncControls()
             updateMiniPlayer()
             uiHandler.removeCallbacks(progressTicker)
@@ -171,6 +173,7 @@ class MainActivity : Activity() {
         val serviceIntent = Intent(this, PlaybackService::class.java)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
         bound = bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
+        if (savedInstanceState == null) handleViewIntent(intent)
         requestLibraryPermissionOrLoad()
     }
 
@@ -584,6 +587,32 @@ class MainActivity : Activity() {
         displayContentPage(page)
     }
 
+    private fun addTrackCardsRow(parent: LinearLayout, tracks: List<MusicTrack>) {
+        val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tracks.forEachIndexed { index, track ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { playTracks(tracks, index) }
+                setOnLongClickListener { showTrackActions(track); true }
+            }
+            card.addView(artwork(track, 124, 18), LinearLayout.LayoutParams(dp(124), dp(124)))
+            card.addView(uiText(track.title, 13f, cText, true).apply {
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(8), 0, dp(3))
+            })
+            card.addView(uiText(track.artist, 11.5f, cMuted).apply {
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            horizontal.addView(card, LinearLayout.LayoutParams(dp(124), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(14) })
+        }
+        parent.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+            addView(horizontal)
+        }, matchWrap())
+    }
+
     private fun buildHomeView(): View {
         val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(cBackground) }
         val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
@@ -664,6 +693,21 @@ class MainActivity : Activity() {
                 horizontal.addView(albumCard, LinearLayout.LayoutParams(dp(152), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(16) })
             }
             content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipToPadding = false; addView(horizontal) }, matchWrap())
+        }
+
+        val recentTracks = PlayHistory.recent(this).mapNotNull { libraryTrackByUri[Uri.parse(it)] }.take(10)
+        if (recentTracks.isNotEmpty()) {
+            sectionHeading(content, "Recently played")
+            addTrackCardsRow(content, recentTracks)
+        }
+        val likedTracks = playlistStore.favourites()
+            .mapNotNull { id -> libraryIndexById[id]?.let { librarySnapshot.getOrNull(it) } }.take(12)
+        if (likedTracks.isNotEmpty()) {
+            sectionHeading(content, "Your favourites", "See all", {
+                currentLibraryTab = LIBRARY_FAVOURITES; currentAlbum = null; currentArtist = null; currentPlaylist = null
+                showLibrary(refreshContent = true)
+            })
+            addTrackCardsRow(content, likedTracks)
         }
 
         sectionHeading(content, "Recently added", "View library", { showLibrary() })
@@ -1917,24 +1961,33 @@ class MainActivity : Activity() {
 
     private fun showTrackActions(track: MusicTrack) {
         val favourite = playlistStore.isFavourite(track.id)
-        val actions = arrayOf("Play now", "Play next", "Add to queue", if (favourite) "Remove from favourites" else "Add to favourites", "Add to playlist")
-        AlertDialog.Builder(this).setTitle(track.title).setItems(actions) { _, which ->
-            when (which) {
-                0 -> {
-                    val visibleIndex = displayedTracks.indexOfFirst { it.id == track.id }
-                    if (visibleIndex >= 0) {
-                        playTracks(displayedTracks, visibleIndex)
-                    } else {
-                        val libraryIndex = libraryIndexById[track.id]
-                        if (libraryIndex != null) playTracks(librarySnapshot, libraryIndex)
-                        else playTracks(listOf(track), 0)
-                    }
-                }
-                1 -> { playback?.addToQueue(track, true); Toast.makeText(this, "Queued to play next", Toast.LENGTH_SHORT).show() }
-                2 -> { playback?.addToQueue(track, false); Toast.makeText(this, "Added to queue", Toast.LENGTH_SHORT).show() }
-                3 -> { playlistStore.toggleFavourite(track.id); renderLibraryItems() }
-                4 -> showAddToPlaylistDialog(track)
+        val playlistName = if (currentLibraryTab == LIBRARY_PLAYLISTS) currentPlaylist else null
+        val labels = ArrayList<String>()
+        val handlers = ArrayList<() -> Unit>()
+        fun add(label: String, block: () -> Unit) { labels.add(label); handlers.add(block) }
+
+        add("Play now") {
+            val visibleIndex = displayedTracks.indexOfFirst { it.id == track.id }
+            if (visibleIndex >= 0) {
+                playTracks(displayedTracks, visibleIndex)
+            } else {
+                val libraryIndex = libraryIndexById[track.id]
+                if (libraryIndex != null) playTracks(librarySnapshot, libraryIndex)
+                else playTracks(listOf(track), 0)
             }
+        }
+        add("Play next") { playback?.addToQueue(track, true); Toast.makeText(this, "Queued to play next", Toast.LENGTH_SHORT).show() }
+        add("Add to queue") { playback?.addToQueue(track, false); Toast.makeText(this, "Added to queue", Toast.LENGTH_SHORT).show() }
+        add(if (favourite) "Remove from favourites" else "Add to favourites") { playlistStore.toggleFavourite(track.id); renderLibraryItems() }
+        add("Add to playlist") { showAddToPlaylistDialog(track) }
+        if (playlistName != null) {
+            add("Remove from $playlistName") {
+                playlistStore.removeFromPlaylist(playlistName, track.id)
+                renderLibraryItems()
+            }
+        }
+        AlertDialog.Builder(this).setTitle(track.title).setItems(labels.toTypedArray()) { _, which ->
+            handlers.getOrNull(which)?.invoke()
         }.show()
     }
 
@@ -2146,20 +2199,83 @@ class MainActivity : Activity() {
     }
 
     private fun showQueueDialog() {
-        val entries = playback?.queueSnapshot().orEmpty()
-        if (entries.isEmpty()) {
+        val service = playback ?: return
+        if (service.queueSize() == 0) {
             Toast.makeText(this, "The queue is empty", Toast.LENGTH_SHORT).show()
             return
         }
-        val current = playback?.currentQueueIndex() ?: -1
-        val labels = entries.mapIndexed { index, entry ->
-            (if (index == current) "▶  " else "    ") + entry.title + " — " + entry.artist
+        val dialog = AlertDialog.Builder(this).setTitle("Playback queue").create()
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(6), dp(6), dp(6))
         }
-        AlertDialog.Builder(this).setTitle("Playback queue").setItems(labels.toTypedArray()) { _, which ->
-            currentNowPlaying = libraryTrackByUri[entries[which].uri] ?: currentNowPlaying
-            playback?.skipToQueueIndex(which)
-            showNowPlaying()
-        }.setNeutralButton("Clear queue") { _, _ -> playback?.clearQueue(); currentNowPlaying = null; updateMiniPlayer() }.show()
+        scroll.addView(list)
+        dialog.setView(scroll)
+        dialog.setButton(android.content.DialogInterface.BUTTON_NEUTRAL, "Clear queue") { _, _ ->
+            service.clearQueue(); currentNowPlaying = null; updateMiniPlayer()
+        }
+        dialog.setButton(android.content.DialogInterface.BUTTON_POSITIVE, "Done") { _, _ -> }
+
+        fun queueButton(glyph: String, description: String, onClick: () -> Unit): TextView =
+            uiText(glyph, 16f, cMuted, true).apply {
+                gravity = Gravity.CENTER
+                contentDescription = description
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { onClick() }
+            }
+
+        fun render() {
+            list.removeAllViews()
+            val entries = service.queueSnapshot()
+            if (entries.isEmpty()) { dialog.dismiss(); return }
+            val current = service.currentQueueIndex()
+            val start = (current - 3).coerceAtLeast(0)
+            val end = minOf(entries.size, start + 120)
+            for (index in start until end) {
+                val entry = entries[index]
+                val isCurrent = index == current
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(6), dp(6), dp(2), dp(6))
+                    isClickable = true
+                    isFocusable = true
+                    if (isCurrent) background = roundedBackground(cAccentDeep, 12)
+                    setOnClickListener {
+                        currentNowPlaying = libraryTrackByUri[entry.uri] ?: currentNowPlaying
+                        service.skipToQueueIndex(index)
+                        dialog.dismiss()
+                        showNowPlaying()
+                    }
+                }
+                row.addView(uiText(if (isCurrent) "▶" else "${index + 1}", 12f, if (isCurrent) cAccent else cMuted, true).apply { gravity = Gravity.CENTER },
+                    LinearLayout.LayoutParams(dp(30), ViewGroup.LayoutParams.WRAP_CONTENT))
+                val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                text.addView(uiText(entry.title, 14f, if (isCurrent) cAccent else cText, true).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                text.addView(uiText(entry.artist, 11.5f, cMuted).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(3), 0, 0)
+                })
+                row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                row.addView(queueButton("▲", "Move up") { service.moveQueueItem(index, index - 1); render() },
+                    LinearLayout.LayoutParams(dp(36), dp(40)))
+                row.addView(queueButton("▼", "Move down") { service.moveQueueItem(index, index + 1); render() },
+                    LinearLayout.LayoutParams(dp(36), dp(40)))
+                row.addView(queueButton("✕", "Remove from queue") { service.removeFromQueue(index); render(); updateMiniPlayer() },
+                    LinearLayout.LayoutParams(dp(36), dp(40)))
+                list.addView(row, matchWrap())
+            }
+            if (end < entries.size) {
+                list.addView(uiText("+ ${entries.size - end} more in queue", 12f, cMuted).apply {
+                    gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(6))
+                }, matchWrap())
+            }
+        }
+        dialog.show()
+        render()
     }
 
     private fun togglePlayback() {
@@ -2384,6 +2500,19 @@ class MainActivity : Activity() {
         textSize = 12f
         setTextColor(Color.rgb(201, 214, 220))
         setPadding(0, dp(2), 0, dp(4))
+    }
+
+    private fun handleViewIntent(incoming: Intent?) {
+        if (incoming?.action != Intent.ACTION_VIEW) return
+        val uri = incoming.data ?: return
+        if (playback != null) playback?.load(uri) else pendingUri = uri
+        incoming.action = null
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleViewIntent(intent)
     }
 
     private fun chooseAudio() {
