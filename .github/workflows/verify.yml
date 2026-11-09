@@ -68,9 +68,10 @@ jobs:
           test -s "$APK"
           sha256sum "$APK" | tee auralis/AURALIS-SHA256SUMS.txt
           cat > auralis/AURALIS-BUILD-INFO.txt <<INFO
-          Auralis standard music player feature build
+          Auralis 1.2.0 interface redesign
           Source: ${GITHUB_SHA}
           Application ID: com.auralis
+          Version: 1.2.0 (versionCode 3)
           Variant: debug
           Build task: assembleDebug
           Test task: testDebugUnitTest
@@ -78,7 +79,7 @@ jobs:
       - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: auralis-standard-player-debug-${{ github.sha }}
+          name: auralis-1.2.0-redesigned-debug-${{ github.sha }}
           path: |
             auralis/app/build/outputs/apk/debug/app-debug.apk
             auralis/AURALIS-BUILD-INFO.txt

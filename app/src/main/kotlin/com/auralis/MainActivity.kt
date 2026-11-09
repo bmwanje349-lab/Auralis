@@ -26,18 +26,25 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CompoundButton
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
-import android.widget.ProgressBar
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.card.MaterialCardView
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
+import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.slider.Slider
 
 class MainActivity : Activity() {
     private var playback: PlaybackService? = null
@@ -45,10 +52,20 @@ class MainActivity : Activity() {
     private var pendingUri: Uri? = null
     private var pendingQueue: Pair<List<MusicTrack>, Int>? = null
     private lateinit var contentFrame: FrameLayout
+    private lateinit var miniPlayerCard: MaterialCardView
+    private lateinit var miniArtwork: ImageView
     private lateinit var miniTitle: TextView
     private lateinit var miniSubtitle: TextView
-    private lateinit var miniPlayButton: Button
+    private lateinit var miniPlayButton: MaterialButton
+    private lateinit var bottomNavigation: LinearLayout
+    private val navigationItems = linkedMapOf<String, LinearLayout>()
     private lateinit var dspPage: View
+    private var activeDestination = DEST_HOME
+    private var returnDestination = DEST_HOME
+    private var soundReturnDestination = DEST_HOME
+    private var libraryCountLabel: TextView? = null
+    private var librarySearchField: EditText? = null
+    private var isSearchPage = false
     private val libraryTracks = mutableListOf<MusicTrack>()
     private var displayedTracks: List<MusicTrack> = emptyList()
     private var currentLibraryTab = LIBRARY_SONGS
@@ -63,30 +80,31 @@ class MainActivity : Activity() {
     private var userSeeking = false
     private lateinit var trackTitle: TextView
     private lateinit var status: TextView
-    private lateinit var reverbToggle: CheckBox
-    private val reverbSliders = arrayOfNulls<SeekBar>(7)
+    private lateinit var reverbToggle: CompoundButton
+    private val reverbSliders = arrayOfNulls<Slider>(7)
     private val reverbValueLabels = arrayOfNulls<TextView>(7)
     private val reverbInitial = intArrayOf(55, 50, 45, 15, 100, 50, 50)
-    private lateinit var stereoToggle: CheckBox
+    private lateinit var stereoToggle: CompoundButton
     private lateinit var stereoValue: TextView
-    private lateinit var stereoSlider: SeekBar
-    private lateinit var balanceToggle: CheckBox
+    private lateinit var stereoSlider: Slider
+    private lateinit var balanceToggle: CompoundButton
     private lateinit var balanceValue: TextView
-    private lateinit var balanceSlider: SeekBar
-    private lateinit var monoToggle: CheckBox
-    private lateinit var limiterToggle: CheckBox
+    private lateinit var balanceSlider: Slider
+    private lateinit var monoToggle: CompoundButton
+    private lateinit var limiterToggle: CompoundButton
     private lateinit var limiterPathButton: Button
     private var limiterPath = 0
     private var replayMode = 0      // 0 None, 1 Apply, 2 Apply Peak
     private var replaySource = 0    // 0 Album, 1 Track
     private lateinit var replayModeButton: Button
     private lateinit var replaySourceButton: Button
-    private lateinit var replayPreampValue: TextView
-    private lateinit var replayPreampSlider: SeekBar
-    private lateinit var replayDefaultValue: TextView
-    private lateinit var replayDefaultSlider: SeekBar
+    private lateinit var replayPreampSlider: Slider
+    private lateinit var replayDefaultSlider: Slider
     private lateinit var eqContainer: LinearLayout
     private lateinit var eqCount: TextView
+    private lateinit var nowPlayingSeekBar: Slider
+    private lateinit var nowPositionLabel: TextView
+    private lateinit var nowDurationLabel: TextView
     private val eqControls = mutableListOf<EqUiControl>()
 
     private val connection = object : ServiceConnection {
@@ -117,351 +135,560 @@ class MainActivity : Activity() {
         requestLibraryPermissionOrLoad()
     }
 
+    private val cBackground = Color.rgb(8, 13, 18)
+    private val cSurface = Color.rgb(18, 27, 36)
+    private val cSurfaceRaised = Color.rgb(26, 38, 48)
+    private val cSurfaceSoft = Color.rgb(31, 45, 55)
+    private val cAccent = Color.rgb(168, 231, 213)
+    private val cAccentDeep = Color.rgb(24, 74, 66)
+    private val cText = Color.rgb(241, 245, 246)
+    private val cMuted = Color.rgb(157, 174, 183)
+    private val cBorder = Color.rgb(47, 62, 73)
+    private val cLavender = Color.rgb(185, 176, 255)
+
+    private fun uiText(value: String, size: Float = 14f, color: Int = cText, bold: Boolean = false): TextView =
+        TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(color)
+            if (bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            includeFontPadding = false
+        }
+
+    private fun roundedCard(backgroundColor: Int = cSurface, radius: Int = 22): MaterialCardView =
+        MaterialCardView(this).apply {
+            radius = dp(radius).toFloat()
+            cardElevation = 0f
+            strokeWidth = dp(1)
+            strokeColor = cBorder
+            setCardBackgroundColor(backgroundColor)
+            useCompatPadding = false
+        }
+
+    private fun roundedBackground(color: Int, radius: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+        }
+
+    private fun materialAction(label: String, primary: Boolean = false, compact: Boolean = false): MaterialButton =
+        MaterialButton(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = if (compact) 11f else 13f
+            cornerRadius = dp(if (compact) 14 else 17)
+            insetTop = 0
+            insetBottom = 0
+            minHeight = dp(if (compact) 40 else 50)
+            setPadding(dp(if (compact) 12 else 17), dp(5), dp(if (compact) 12 else 17), dp(5))
+            backgroundTintList = ColorStateList.valueOf(if (primary) cAccent else cSurfaceSoft)
+            setTextColor(if (primary) Color.rgb(6, 29, 23) else cText)
+            strokeWidth = if (primary) 0 else dp(1)
+            strokeColor = ColorStateList.valueOf(cBorder)
+            elevation = 0f
+        }
+
+    private fun iconControl(icon: Int, description: String, size: Int = 44, background: Int = cSurfaceSoft,
+                            tint: Int = cText, onClick: () -> Unit): MaterialCardView {
+        val card = roundedCard(background, 16).apply {
+            strokeWidth = 0
+            isClickable = true
+            isFocusable = true
+            contentDescription = description
+            setOnClickListener { onClick() }
+        }
+        val image = ImageView(this).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(tint)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = description
+        }
+        card.addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        card.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
+        return card
+    }
+
+    private fun artwork(track: MusicTrack?, size: Int, radius: Int = 17): MaterialCardView {
+        val card = MaterialCardView(this).apply {
+            this.radius = dp(radius).toFloat()
+            cardElevation = 0f
+            strokeWidth = 0
+            setCardBackgroundColor(Color.rgb(34, 58, 63))
+            clipToOutline = true
+        }
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.rgb(38, 91, 83), Color.rgb(48, 58, 89), Color.rgb(30, 40, 54)))
+            if (track?.albumArtUri != null) {
+                val loaded = runCatching { imageTintList = null; setPadding(0, 0, 0, 0); setImageURI(track.albumArtUri); drawable != null }.getOrDefault(false)
+                if (!loaded) setPlaceholderArtwork(this)
+            } else setPlaceholderArtwork(this)
+        }
+        card.addView(image, FrameLayout.LayoutParams(dp(size), dp(size)))
+        card.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
+        return card
+    }
+
+    private fun setPlaceholderArtwork(image: ImageView) {
+        image.setImageResource(R.drawable.ic_music_note)
+        image.imageTintList = ColorStateList.valueOf(Color.rgb(170, 229, 213))
+        image.setPadding(dp(22), dp(22), dp(22), dp(22))
+        image.scaleType = ImageView.ScaleType.CENTER_INSIDE
+    }
+
+    private fun sectionHeading(parent: LinearLayout, title: String, action: String? = null, onAction: (() -> Unit)? = null) {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(20), 0, dp(11))
+        }
+        row.addView(uiText(title, 18f, cText, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (action != null && onAction != null) {
+            row.addView(MaterialButton(this).apply {
+                text = action
+                isAllCaps = false
+                textSize = 11f
+                cornerRadius = dp(12)
+                insetTop = 0; insetBottom = 0
+                minHeight = dp(34)
+                backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+                setTextColor(cAccent)
+                setPadding(dp(8), 0, dp(8), 0)
+                setOnClickListener { onAction() }
+            })
+        }
+        parent.addView(row, matchWrap())
+    }
+
+    private fun createNavItem(key: String, title: String, icon: Int, onClick: () -> Unit): LinearLayout {
+        val item = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(5), dp(7), dp(5), dp(5))
+            setOnClickListener { onClick() }
+        }
+        val glyph = ImageView(this).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(cMuted)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+        }
+        item.addView(glyph, LinearLayout.LayoutParams(dp(23), dp(23)))
+        val label = uiText(title, 10f, cMuted, false).apply { setPadding(0, dp(4), 0, 0) }
+        item.addView(label)
+        item.tag = key
+        navigationItems[key] = item
+        return item
+    }
+
+    private fun updateNavigationState() {
+        navigationItems.forEach { (key, item) ->
+            val selected = activeDestination == key || (activeDestination == DEST_NOW_PLAYING && key == returnDestination)
+            item.background = if (selected) roundedBackground(Color.rgb(29, 57, 56), 16) else null
+            (item.getChildAt(0) as? ImageView)?.imageTintList = ColorStateList.valueOf(if (selected) cAccent else cMuted)
+            (item.getChildAt(1) as? TextView)?.setTextColor(if (selected) cAccent else cMuted)
+        }
+    }
+
     private fun buildInterface() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(12, 18, 25))
+            setBackgroundColor(cBackground)
+            setPadding(0, 0, 0, dp(7))
         }
+
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(14), dp(16), dp(12))
-            setBackgroundColor(Color.rgb(18, 28, 38))
+            setPadding(dp(19), dp(12), dp(18), dp(12))
+            setBackgroundColor(cBackground)
         }
-        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        brand.addView(TextView(this).apply {
-            text = "AURALIS"
-            textSize = 22f
-            letterSpacing = 0.16f
-            setTextColor(Color.rgb(128, 203, 196))
-        })
-        brand.addView(TextView(this).apply {
-            text = "MUSIC PLAYER"
-            textSize = 9f
-            letterSpacing = 0.18f
-            setTextColor(Color.rgb(157, 176, 190))
-        })
-        header.addView(brand, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(Button(this).apply {
-            text = "OPEN FILE"
-            setOnClickListener { chooseAudio() }
-            styleButton(this, compact = true)
-        })
+        val mark = roundedCard(cAccentDeep, 15).apply { strokeWidth = 0 }
+        mark.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_auralis_mark)
+            imageTintList = ColorStateList.valueOf(cAccent)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+        }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        header.addView(mark, LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(11) })
+
+        val wordmark = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        wordmark.addView(uiText("AURALIS", 17f, cText, true).apply { letterSpacing = 0.15f })
+        wordmark.addView(uiText("MUSIC, IN ITS ELEMENT", 8.5f, cMuted, true).apply { letterSpacing = 0.15f; setPadding(0, dp(3), 0, 0) })
+        header.addView(wordmark, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        header.addView(iconControl(R.drawable.ic_search, "Search music", 42, cSurface) { showSearch() },
+            LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(8) })
+        header.addView(iconControl(R.drawable.ic_add, "Open an audio file", 42, cSurface) { chooseAudio() },
+            LinearLayout.LayoutParams(dp(42), dp(42)))
         root.addView(header)
 
         contentFrame = FrameLayout(this)
         root.addView(contentFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        val mini = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(14), dp(7), dp(10), dp(7))
-            setBackgroundColor(Color.rgb(24, 36, 47))
+        miniPlayerCard = roundedCard(cSurfaceRaised, 20).apply {
+            visibility = View.GONE
             setOnClickListener { showNowPlaying() }
         }
+        val miniContent = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(9), dp(8), dp(9), dp(8))
+        }
+        miniArtwork = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = roundedBackground(cAccentDeep, 12)
+        }
+        miniContent.addView(miniArtwork, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(11) })
         val miniText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        miniTitle = TextView(this).apply {
-            text = "Nothing playing"
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            maxLines = 1
-        }
-        miniSubtitle = TextView(this).apply {
-            text = "Choose music from your library"
-            textSize = 11f
-            setTextColor(Color.rgb(155, 174, 187))
-            maxLines = 1
-        }
+        miniTitle = uiText("Nothing playing", 13f, cText, true).apply { maxLines = 1 }
+        miniSubtitle = uiText("Choose a track from your library", 10.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) }
         miniText.addView(miniTitle)
         miniText.addView(miniSubtitle)
-        mini.addView(miniText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        mini.addView(Button(this).apply {
-            text = "|◀"
-            setOnClickListener { playback?.skipToPrevious(); updateMiniPlayer() }
-            styleButton(this, compact = true)
-        })
-        miniPlayButton = Button(this).apply {
-            text = "▶"
+        miniContent.addView(miniText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        miniPlayButton = MaterialButton(this).apply {
+            text = ""
+            setIconResource(R.drawable.ic_play)
+            iconTint = ColorStateList.valueOf(Color.rgb(6, 29, 23))
+            iconSize = dp(22)
+            iconPadding = 0
+            iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+            cornerRadius = dp(17)
+            insetTop = 0; insetBottom = 0
+            minWidth = dp(44); minHeight = dp(44)
+            backgroundTintList = ColorStateList.valueOf(cAccent)
             setOnClickListener { togglePlayback() }
-            styleButton(this, compact = true)
         }
-        mini.addView(miniPlayButton)
-        mini.addView(Button(this).apply {
-            text = "▶|"
-            setOnClickListener { playback?.skipToNext(); updateMiniPlayer() }
-            styleButton(this, compact = true)
+        miniContent.addView(miniPlayButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(8) })
+        miniPlayerCard.addView(miniContent)
+        root.addView(miniPlayerCard, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            marginStart = dp(13); marginEnd = dp(13); topMargin = dp(7); bottomMargin = dp(7)
         })
-        root.addView(mini)
 
-        val nav = LinearLayout(this).apply {
+        bottomNavigation = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.rgb(18, 28, 38))
-            setPadding(dp(8), dp(4), dp(8), dp(4))
+            gravity = Gravity.CENTER
+            setPadding(dp(7), dp(5), dp(7), dp(5))
+            background = roundedBackground(cSurface, 22)
         }
-        listOf("LIBRARY", "NOW PLAYING", "DSP").forEachIndexed { index, title ->
-            nav.addView(Button(this).apply {
-                text = title
-                textSize = 10f
-                setOnClickListener { when (index) { 0 -> showLibrary(); 1 -> showNowPlaying(); else -> showDsp() } }
-                styleButton(this, compact = true)
-            }, LinearLayout.LayoutParams(0, dp(46), 1f))
-        }
-        root.addView(nav)
-        setContentView(root)
+        bottomNavigation.addView(createNavItem(DEST_HOME, "Home", R.drawable.ic_home) { showHome() },
+            LinearLayout.LayoutParams(0, dp(58), 1f))
+        bottomNavigation.addView(createNavItem(DEST_SEARCH, "Search", R.drawable.ic_search) { showSearch() },
+            LinearLayout.LayoutParams(0, dp(58), 1f))
+        bottomNavigation.addView(createNavItem(DEST_LIBRARY, "Library", R.drawable.ic_library) { showLibrary() },
+            LinearLayout.LayoutParams(0, dp(58), 1f))
+        bottomNavigation.addView(createNavItem(DEST_SOUND, "Sound", R.drawable.ic_tune) { showDsp() },
+            LinearLayout.LayoutParams(0, dp(58), 1f))
+        root.addView(bottomNavigation, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            marginStart = dp(13); marginEnd = dp(13)
+        })
 
-        // Build once so all existing DSP controls are ready when the service binds.
+        setContentView(root)
         dspPage = buildDspPage()
-        showLibrary()
+        showHome()
+    }
+
+    private fun showHome() {
+        activeDestination = DEST_HOME
+        updateNavigationState()
+        updateMiniPlayer()
+        contentFrame.removeAllViews()
+        contentFrame.addView(buildHomeView(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    }
+
+    private fun buildHomeView(): View {
+        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(cBackground) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(17), dp(20), dp(28))
+        }
+        content.addView(uiText("YOUR MUSIC", 10f, cAccent, true).apply { letterSpacing = 0.18f })
+        content.addView(uiText("Find your next
+favourite.", 30f, cText, true).apply {
+            setPadding(0, dp(8), 0, dp(7)); setLineSpacing(dp(1).toFloat(), 1.0f)
+        })
+        content.addView(uiText("A personal space for the music you love.", 13f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
+
+        val current = playback?.currentEntry()
+        val activeTrack = current?.let { entry -> libraryTracks.firstOrNull { it.uri == entry.uri } } ?: currentNowPlaying
+        val featured = activeTrack ?: libraryTracks.firstOrNull()
+        val featuredCard = roundedCard(Color.rgb(20, 43, 46), 24)
+        val featuredRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(13), dp(13), dp(13), dp(13)) }
+        featuredRow.addView(artwork(featured, 104, 18), LinearLayout.LayoutParams(dp(104), dp(104)).apply { marginEnd = dp(14) })
+        val featureText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        featureText.addView(uiText(if (activeTrack != null) "PICK UP WHERE YOU LEFT OFF" else "READY WHEN YOU ARE", 9f, cAccent, true).apply { letterSpacing = 0.1f })
+        featureText.addView(uiText(featured?.title ?: "Your library is waiting", 17f, cText, true).apply { maxLines = 2; setPadding(0, dp(7), 0, dp(3)) })
+        featureText.addView(uiText(featured?.artist ?: "Add music from your device", 11f, cMuted).apply { maxLines = 1 })
+        featureText.addView(materialAction(if (activeTrack != null) "Continue listening" else if (libraryTracks.isEmpty()) "Scan music" else "Start listening", true, true).apply {
+            setOnClickListener {
+                when {
+                    activeTrack != null && playback?.currentEntry() != null -> showNowPlaying()
+                    featured != null -> playTracks(libraryTracks, libraryTracks.indexOfFirst { it.id == featured.id }.coerceAtLeast(0))
+                    else -> requestLibraryPermissionOrLoad()
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(39)).apply { topMargin = dp(10) }
+        })
+        featuredCard.addView(featuredRow)
+        content.addView(featuredCard, matchWrap())
+
+        val albumGroups = libraryTracks.groupBy { it.album to it.artist }.values
+            .mapNotNull { it.firstOrNull() }
+            .sortedByDescending { it.dateAddedSeconds }
+        if (albumGroups.isNotEmpty()) {
+            sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary() })
+            val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            albumGroups.take(12).forEach { track ->
+                val albumCard = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = track.album; showLibrary() }
+                }
+                albumCard.addView(artwork(track, 138, 17), LinearLayout.LayoutParams(dp(138), dp(138)))
+                albumCard.addView(uiText(track.album, 12.5f, cText, true).apply { maxLines = 1; setPadding(0, dp(8), 0, dp(3)) })
+                albumCard.addView(uiText(track.artist, 10.5f, cMuted).apply { maxLines = 1 })
+                horizontal.addView(albumCard, LinearLayout.LayoutParams(dp(138), ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(13) })
+            }
+            content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; clipToPadding = false; addView(horizontal) }, matchWrap())
+        }
+
+        sectionHeading(content, "Recently added", "View library", { showLibrary() })
+        if (libraryTracks.isEmpty()) {
+            val empty = roundedCard(cSurface, 22)
+            val emptyContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER; setPadding(dp(24), dp(28), dp(24), dp(28)) }
+            val emptyIcon = ImageView(this).apply { setImageResource(R.drawable.ic_headphones); imageTintList = ColorStateList.valueOf(cAccent); scaleType = ImageView.ScaleType.CENTER_INSIDE }
+            emptyContent.addView(emptyIcon, LinearLayout.LayoutParams(dp(46), dp(46)))
+            emptyContent.addView(uiText("Nothing in your library yet", 17f, cText, true).apply { gravity = Gravity.CENTER; setPadding(0, dp(12), 0, dp(6)) })
+            emptyContent.addView(uiText("Scan your device for music or open an audio file to start listening.", 12f, cMuted).apply { gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(13)) })
+            emptyContent.addView(materialAction("Scan music library", true).apply { setOnClickListener { requestLibraryPermissionOrLoad() } }, matchWrap())
+            empty.addView(emptyContent)
+            content.addView(empty, matchWrap())
+        } else {
+            val latest = libraryTracks.sortedByDescending { it.dateAddedSeconds }.take(6)
+            latest.forEachIndexed { index, track -> addTrackRow(content, track, latest, index) }
+        }
+
+        sectionHeading(content, "Your listening space", "Sound settings", { showDsp() })
+        val soundCard = roundedCard(cSurface, 20)
+        val soundRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(14), dp(14), dp(14)) }
+        soundRow.addView(iconControl(R.drawable.ic_equalizer, "Open sound settings", 48, cAccentDeep, cAccent) { showDsp() },
+            LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(12) })
+        val soundText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        soundText.addView(uiText("Shape your sound", 14f, cText, true))
+        soundText.addView(uiText("StereoWide, EQ, preamp and more", 11f, cMuted).apply { setPadding(0, dp(4), 0, 0) })
+        soundRow.addView(soundText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        soundRow.addView(uiText("›", 24f, cAccent, true))
+        soundRow.setOnClickListener { showDsp() }
+        soundCard.addView(soundRow)
+        content.addView(soundCard)
+
+        scroll.addView(content)
+        page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        return page
+    }
+
+    private fun showSearch() {
+        activeDestination = DEST_SEARCH
+        updateNavigationState()
+        updateMiniPlayer()
+        contentFrame.removeAllViews()
+        contentFrame.addView(buildLibraryView(searchMode = true), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        librarySearchField?.requestFocus()
+    }
+
+    private fun dspCard(parent: LinearLayout, title: String, subtitle: String, contentBuilder: (LinearLayout) -> Unit): LinearLayout {
+        val card = roundedCard(cSurface, 22)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(15), dp(16), dp(15))
+        }
+        body.addView(uiText(title, 16f, cText, true))
+        body.addView(uiText(subtitle, 10.5f, cMuted).apply { setPadding(0, dp(5), 0, dp(12)) })
+        val divider = View(this).apply { setBackgroundColor(cBorder) }
+        body.addView(divider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply { bottomMargin = dp(9) })
+        contentBuilder(body)
+        card.addView(body)
+        parent.addView(card, matchWrap().apply { bottomMargin = dp(12) })
+        return body
+    }
+
+    private fun dspSwitch(parent: LinearLayout, title: String, detail: String, onChange: (Boolean) -> Unit): MaterialSwitch {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(5), 0, dp(5)) }
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(uiText(title, 13f, cText, true))
+        copy.addView(uiText(detail, 10f, cMuted).apply { setPadding(0, dp(3), 0, 0) })
+        row.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val toggle = MaterialSwitch(this).apply {
+            setOnCheckedChangeListener { _, checked -> onChange(checked) }
+        }
+        row.addView(toggle)
+        parent.addView(row, matchWrap().apply { bottomMargin = dp(4) })
+        return toggle
+    }
+
+    private fun dspSlider(
+        parent: LinearLayout,
+        title: String,
+        initial: Float,
+        max: Float = 100f,
+        step: Float = 1f,
+        format: (Float) -> String,
+        onChange: (Float) -> Unit
+    ): Pair<Slider, TextView> {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        row.addView(uiText(title, 12f, cMuted, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val value = uiText(format(initial), 11f, cAccent, true)
+        row.addView(value)
+        parent.addView(row, matchWrap().apply { topMargin = dp(7) })
+        val slider = Slider(this).apply {
+            valueFrom = 0f
+            valueTo = max
+            stepSize = step
+            this.value = initial.coerceIn(valueFrom, valueTo)
+            addOnChangeListener { _, next, fromUser ->
+                value.text = format(next)
+                onChange(next)
+            }
+        }
+        parent.addView(slider, matchWrap().apply { topMargin = dp(1); bottomMargin = dp(6) })
+        return slider to value
     }
 
     private fun buildDspPage(): View {
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(24), dp(22), dp(24))
-            setBackgroundColor(Color.rgb(16, 24, 32))
-        }
-        val scroll = ScrollView(this).apply { addView(page) }
+        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(cBackground) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(18), dp(20), dp(28)) }
+        content.addView(uiText("SOUND STUDIO", 10f, cAccent, true).apply { letterSpacing = 0.18f })
+        content.addView(uiText("Shape your sound.", 27f, cText, true).apply { setPadding(0, dp(7), 0, dp(5)) })
+        content.addView(uiText("Fine-tune the output without changing the character of your music.", 12f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
 
-        page.addView(TextView(this).apply {
-            text = "AURALIS"
-            textSize = 27f
-            letterSpacing = 0.18f
-            setTextColor(Color.rgb(128, 203, 196))
-        })
-        page.addView(TextView(this).apply {
-            text = "NATIVE AUDIO PLAYER"
-            textSize = 11f
-            letterSpacing = 0.16f
-            setTextColor(Color.rgb(166, 184, 194))
-            setPadding(0, dp(3), 0, dp(20))
-        })
-
-        page.addView(Button(this).apply {
-            text = "OPEN AUDIO FILE"
-            setOnClickListener { chooseAudio() }
-        }, matchWrap())
-        trackTitle = TextView(this).apply {
-            text = "No track selected"
-            textSize = 18f
-            setTextColor(Color.WHITE)
-            setPadding(0, dp(18), 0, dp(4))
+        val output = dspCard(content, "Master preamp", "Independent output gain · −15.0 to +15.0 dB") { body ->
+            val saved = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getInt(KEY_MASTER_PREAMP, 150).coerceIn(0, 300)
+            val (slider, _) = dspSlider(body, "OUTPUT LEVEL", saved.toFloat(), 300f, 1f,
+                { replayDbText(it.toInt()) }) { _ -> applyReplayGain() }
+            replayPreampSlider = slider
+            body.addView(MaterialButton(this).apply {
+                text = "Reset to 0 dB"
+                isAllCaps = false
+                textSize = 10.5f
+                cornerRadius = dp(12)
+                insetTop = 0; insetBottom = 0
+                minHeight = dp(36)
+                backgroundTintList = ColorStateList.valueOf(cSurfaceSoft)
+                setTextColor(cText)
+                setOnClickListener { replayPreampSlider.value = 150f; applyReplayGain() }
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)).apply { topMargin = dp(4) })
         }
-        page.addView(trackTitle)
-        status = TextView(this).apply {
-            text = "Connecting to audio engine…"
-            textSize = 12f
-            setTextColor(Color.rgb(166, 184, 194))
-            setPadding(0, 0, 0, dp(16))
-        }
-        page.addView(status)
 
-        val transport = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        dspCard(content, "Stereo field", "Width and channel placement") { body ->
+            stereoToggle = dspSwitch(body, "StereoWide", "Mid-side stereo expansion", { checked -> playback?.setStereoWide(checked, stereoSlider.value.toInt()) })
+            val (width, widthLabel) = dspSlider(body, "STEREO EXPANSION", 0f, 100f, 1f,
+                { value -> "${value.toInt()}%  ·  ${"%.2f".format(1.0 + 2.0 * value / 100.0)}×" }) { value ->
+                val gain = 1.0 + 2.0 * value / 100.0
+                stereoValue.text = "Slider ${value.toInt()}% · side gain ${"%.2f".format(gain)}"
+                playback?.setStereoWide(stereoToggle.isChecked, value.toInt())
+            }
+            stereoSlider = width
+            stereoValue = uiText("Slider 0% · side gain 1.00", 10f, cMuted)
+            body.addView(stereoValue)
+            balanceToggle = dspSwitch(body, "Balance", "Attenuate left or right channel", { checked -> playback?.setBalance(checked, (balanceSlider.value - 100f) / 100.0) })
+            val (balance, _) = dspSlider(body, "LEFT  ·  CENTER  ·  RIGHT", 100f, 200f, 1f,
+                { value -> when { value < 100f -> "L ${value.toInt()}%"; value > 100f -> "R ${(value - 100f).toInt()}%"; else -> "CENTER" } }) { value ->
+                val normalized = (value - 100f) / 100.0
+                val db = 48.0 * kotlin.math.abs(normalized)
+                balanceValue.text = when {
+                    normalized >= 1.0 -> "Right bias · left silent (gain exactly 0)"
+                    normalized <= -1.0 -> "Left bias · right silent (gain exactly 0)"
+                    normalized > 0.0 -> "Right bias · left −${"%.1f".format(db)} dB"
+                    normalized < 0.0 -> "Left bias · right −${"%.1f".format(db)} dB"
+                    else -> "Center · both channels at 0 dB"
+                }
+                playback?.setBalance(balanceToggle.isChecked, normalized)
+            }
+            balanceSlider = balance
+            balanceValue = uiText("Center · both channels at 0 dB", 10f, cMuted)
+            body.addView(balanceValue)
+            monoToggle = dspSwitch(body, "Mono fold-down", "Combine left and right using (L + R) / 2", { checked -> playback?.setMono(checked) })
+        }
+
+        dspCard(content, "Equalizer", "Parametric filters · up to 64 bands") { body ->
+            val eqHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            eqCount = uiText("2 / $MAX_EQ_BANDS bands", 10f, cMuted)
+            eqHeader.addView(eqCount, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            eqHeader.addView(materialAction("Add band", true, true).apply { setOnClickListener { showAddEqBandDialog() } })
+            body.addView(eqHeader, matchWrap().apply { bottomMargin = dp(8) })
+            eqContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            body.addView(eqContainer, matchWrap())
+            addEqBand(eqContainer, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
+            addEqBand(eqContainer, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
+            updateEqCount()
+        }
+
+        dspCard(content, "ReplayGain", "Use embedded ReplayGain or R128 metadata when available") { body ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            replayModeButton = materialAction(replayModeText(), false, true).apply {
+                setOnClickListener { replayMode = (replayMode + 1) % 3; text = replayModeText(); applyReplayGain() }
+            }
+            replaySourceButton = materialAction(replaySourceText(), false, true).apply {
+                setOnClickListener { replaySource = 1 - replaySource; text = replaySourceText(); applyReplayGain() }
+            }
+            row.addView(replayModeButton, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginEnd = dp(5) })
+            row.addView(replaySourceButton, LinearLayout.LayoutParams(0, dp(42), 1f).apply { marginStart = dp(5) })
+            body.addView(row, matchWrap())
+            val (default, _) = dspSlider(body, "DEFAULT GAIN WITHOUT TAGS", 150f, 300f, 1f,
+                { replayDbText(it.toInt()) }) { _ -> applyReplayGain() }
+            replayDefaultSlider = default
+        }
+
+        dspCard(content, "Reverb", "Stereo ambience and room character") { body ->
+            reverbToggle = dspSwitch(body, "Enable reverb", "Apply the native reverb processor", { enabled -> playback?.setReverbEnabled(enabled) })
+            val names = arrayOf("Size", "Filter", "Fade", "Pre-delay", "Mix", "Pre-delay mix", "Damp")
+            for (index in names.indices) {
+                val (slider, label) = dspSlider(body, names[index], reverbInitial[index].toFloat(), 100f, 1f,
+                    { value -> when (index) {
+                        1 -> "${value.toInt()}% · ${100 + 185 * value.toInt()} Hz"
+                        3 -> "${value.toInt()}% · ${value.toInt() * 2} ms"
+                        6 -> "${value.toInt()}% · ${18600 - 185 * value.toInt()} Hz"
+                        else -> "${value.toInt()}%"
+                    } }) { value ->
+                    val intValue = value.toInt()
+                    reverbValueLabels[index].text = when (index) {
+                        1 -> "Filter: $intValue% · cutoff ${100 + 185 * intValue} Hz"
+                        2 -> "Fade: $intValue%"
+                        3 -> "Pre-delay: $intValue% · ${intValue * 2} ms"
+                        6 -> "Damp: $intValue% · cutoff ${18600 - 185 * intValue} Hz"
+                        else -> "${names[index]}: $intValue%"
+                    }
+                    playback?.setReverbParameter(index, value / 100.0)
+                }
+                reverbSliders[index] = slider
+                reverbValueLabels[index] = label
+            }
+        }
+
+        dspCard(content, "Dynamics", "Control peaks and preserve clean output") { body ->
+            limiterToggle = dspSwitch(body, "Peak limiter", "Linked stereo peak detection and limiting", { enabled -> playback?.setLimiter(enabled, limiterPath) })
+            limiterPathButton = materialAction("Path: Hard ceiling (1.0)", false, true).apply {
+                setOnClickListener {
+                    limiterPath = if (limiterPath == 0) 1 else 0
+                    text = if (limiterPath == 0) "Path: Hard ceiling (1.0)" else "Path: Pre-gain protection"
+                    playback?.setLimiter(limiterToggle.isChecked, limiterPath)
+                }
+            }
+            body.addView(limiterPathButton, matchWrap())
+        }
+
+        content.addView(uiText("Changes are sent to the native audio pipeline while music is playing.", 10f, cMuted).apply {
             gravity = Gravity.CENTER
-        }
-        transport.addView(Button(this).apply {
-            text = "PLAY / RESUME"
-            setOnClickListener { playback?.resumePlayback() }
-        }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginEnd = dp(6) })
-        transport.addView(Button(this).apply {
-            text = "PAUSE"
-            setOnClickListener { playback?.pausePlayback() }
-        }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { marginStart = dp(6) })
-        page.addView(transport)
-        page.addView(Button(this).apply {
-            text = "STOP"
-            setOnClickListener { playback?.stopPlayback(); status.text = "Playback stopped" }
-        }, matchWrap().apply { topMargin = dp(6) })
-
-        addSection(page, "REVERB", "Poweramp-mapped controls · experimental stereo reverb while matrix fidelity is verified")
-        reverbToggle = CheckBox(this).apply {
-            text = "Enable Reverb"
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked -> playback?.setReverbEnabled(checked) }
-        }
-        page.addView(reverbToggle)
-        val reverbNames = arrayOf("Size", "Filter", "Fade", "Pre-Delay", "Mix", "Pre-Delay Mix", "Damp")
-        for (index in reverbNames.indices) {
-            val label = label("${reverbNames[index]}: ${reverbInitial[index]}%")
-            reverbValueLabels[index] = label
-            page.addView(label)
-            val slider = SeekBar(this).apply {
-                max = 100
-                progress = reverbInitial[index]
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                        label.text = when (index) {
-                            1 -> "Filter: $value% · cutoff ${100 + 185 * value} Hz"
-                            2 -> "Fade: $value%"
-                            3 -> "Pre-Delay: $value% · ${value * 2} ms"
-                            6 -> "Damp: $value% · cutoff ${18600 - 185 * value} Hz"
-                            else -> "${reverbNames[index]}: $value%"
-                        }
-                        playback?.setReverbParameter(index, value / 100.0)
-                    }
-                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-                })
-            }
-            reverbSliders[index] = slider
-            page.addView(slider, matchWrap())
-        }
-
-        addSection(page, "STEREO WIDE", "Recovered Mid-Side implementation · g = 1 + 2p")
-        stereoToggle = CheckBox(this).apply {
-            text = "Enable StereoWide"
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked ->
-                playback?.setStereoWide(checked, stereoSlider.progress)
-            }
-        }
-        page.addView(stereoToggle)
-        stereoValue = label("Slider: 0%    Side gain: 1.00")
-        page.addView(stereoValue)
-        stereoSlider = SeekBar(this).apply {
-            max = 100
-            progress = 0
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                    val gain = 1.0 + 2.0 * value / 100.0
-                    stereoValue.text = "Slider: $value%    Side gain: ${"%.2f".format(gain)}"
-                    playback?.setStereoWide(stereoToggle.isChecked, value)
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
-        }
-        page.addView(stereoSlider, matchWrap())
-
-        addSection(page, "BALANCE", "Positive values attenuate left; negative values attenuate right")
-        balanceToggle = CheckBox(this).apply {
-            text = "Enable Balance"
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked ->
-                playback?.setBalance(checked, (balanceSlider.progress - 100) / 100.0)
-            }
-        }
-        page.addView(balanceToggle)
-        balanceValue = label("Center · left 0.0 dB · right 0.0 dB")
-        page.addView(balanceValue)
-        balanceSlider = SeekBar(this).apply {
-            max = 200
-            progress = 100
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                    val normalized = (value - 100) / 100.0
-                    val db = 48.0 * kotlin.math.abs(normalized)
-                    balanceValue.text = when {
-                        normalized >= 1.0 -> "Right bias · left silent (gain exactly 0)"
-                        normalized <= -1.0 -> "Left bias · right silent (gain exactly 0)"
-                        normalized > 0.0 -> "Right bias · left −${"%.1f".format(db)} dB"
-                        normalized < 0.0 -> "Left bias · right −${"%.1f".format(db)} dB"
-                        else -> "Center · left 0.0 dB · right 0.0 dB"
-                    }
-                    playback?.setBalance(balanceToggle.isChecked, normalized)
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
-        }
-        page.addView(balanceSlider, matchWrap())
-
-        addSection(page, "MONO", "Native (L+R)/2 fold-down")
-        monoToggle = CheckBox(this).apply {
-            text = "Enable Mono"
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked -> playback?.setMono(checked) }
-        }
-        page.addView(monoToggle)
-
-        addSection(page, "PEAK LIMITER", "Linked stereo detector · native envelope attack/release")
-        limiterToggle = CheckBox(this).apply {
-            text = "Enable Limiter"
-            setTextColor(Color.WHITE)
-            setOnCheckedChangeListener { _, checked -> playback?.setLimiter(checked, limiterPath) }
-        }
-        page.addView(limiterToggle)
-        limiterPathButton = Button(this).apply {
-            text = "Path: Hard ceiling (1.0)"
-            setOnClickListener {
-                limiterPath = if (limiterPath == 0) 1 else 0
-                text = if (limiterPath == 0) "Path: Hard ceiling (1.0)" else "Path: Pre-gain protection"
-                playback?.setLimiter(limiterToggle.isChecked, limiterPath)
-            }
-        }
-        page.addView(limiterPathButton, matchWrap())
-
-        addSection(page, "REPLAYGAIN", "Reads REPLAYGAIN / R128 tags (MP3, FLAC, Ogg, Opus, M4A) when a track loads")
-        replayModeButton = Button(this).apply {
-            text = replayModeText()
-            setOnClickListener {
-                replayMode = (replayMode + 1) % 3
-                text = replayModeText()
-                applyReplayGain()
-            }
-        }
-        page.addView(replayModeButton, matchWrap())
-        replaySourceButton = Button(this).apply {
-            text = replaySourceText()
-            setOnClickListener {
-                replaySource = 1 - replaySource
-                text = replaySourceText()
-                applyReplayGain()
-            }
-        }
-        page.addView(replaySourceButton, matchWrap())
-        replayPreampValue = label("Master preamp: ${replayDbText(150)}")
-        page.addView(replayPreampValue)
-        replayPreampSlider = SeekBar(this).apply {
-            max = 300
-            progress = getSharedPreferences(PREFERENCES, MODE_PRIVATE).getInt(KEY_MASTER_PREAMP, 150).coerceIn(0, 300)
-            replayPreampValue.text = "Master preamp: ${replayDbText(progress)}"
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                    replayPreampValue.text = "Master preamp: ${replayDbText(value)}"
-                    applyReplayGain()
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
-        }
-        page.addView(replayPreampSlider, matchWrap())
-        replayDefaultValue = label("Gain for files without tags: ${replayDbText(150)}")
-        page.addView(replayDefaultValue)
-        replayDefaultSlider = SeekBar(this).apply {
-            max = 300
-            progress = 150
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                    replayDefaultValue.text = "Gain for files without tags: ${replayDbText(value)}"
-                    applyReplayGain()
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
-        }
-        page.addView(replayDefaultSlider, matchWrap())
-
-        addSection(page, "PARAMETRIC EQ", "Up to 64 bands · recovered six-filter biquad model")
-        eqCount = label("0 / 64 bands")
-        page.addView(eqCount)
-        eqContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        page.addView(eqContainer, matchWrap())
-        addEqBand(eqContainer, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
-        addEqBand(eqContainer, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
-        page.addView(Button(this).apply {
-            text = "ADD PARAMETRIC BAND"
-            setOnClickListener { showAddEqBandDialog() }
-        }, matchWrap().apply { topMargin = dp(10) })
-        updateEqCount()
-
-        page.addView(TextView(this).apply {
-            text = "This player uses Android media decoding and native Float32 stereo processing. The recovered playback chain includes StereoWide, Mono fold-down, Balance and the linked-peak Limiter, alongside the six EQ coefficient families. Channel code meanings below the documented 0–2 range use Auralis's local UI mapping."
-            textSize = 11f
-            setTextColor(Color.rgb(143, 160, 170))
-            setPadding(0, dp(26), 0, dp(8))
+            setPadding(dp(8), dp(5), dp(8), dp(10))
         })
-        return scroll
+        scroll.addView(content)
+        page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        return page
     }
 
     private fun styleButton(button: Button, compact: Boolean = false) {
@@ -502,107 +729,167 @@ class MainActivity : Activity() {
             runOnUiThread {
                 libraryTracks.clear()
                 libraryTracks.addAll(loaded)
-                if (::contentFrame.isInitialized && currentLibraryTab != LIBRARY_DSP) showLibrary()
+                if (::contentFrame.isInitialized) {
+                    when (activeDestination) {
+                        DEST_HOME -> showHome()
+                        DEST_SEARCH -> showSearch()
+                        DEST_LIBRARY -> showLibrary()
+                        DEST_NOW_PLAYING -> showNowPlaying()
+                        else -> Unit
+                    }
+                }
             }
         }, "Auralis-library-scan").start()
     }
 
     private fun showDsp() {
+        if (activeDestination != DEST_SOUND) soundReturnDestination = activeDestination
+        activeDestination = DEST_SOUND
+        updateNavigationState()
+        updateMiniPlayer()
         contentFrame.removeAllViews()
         contentFrame.addView(dspPage, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     private fun showLibrary() {
+        activeDestination = DEST_LIBRARY
+        isSearchPage = false
+        updateNavigationState()
+        updateMiniPlayer()
         contentFrame.removeAllViews()
-        contentFrame.addView(buildLibraryView(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        contentFrame.addView(buildLibraryView(searchMode = false), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
-    private fun buildLibraryView(): View {
+    private fun buildLibraryView(searchMode: Boolean = false): View {
+        isSearchPage = searchMode
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(10))
-            setBackgroundColor(Color.rgb(12, 18, 25))
+            setPadding(dp(20), dp(15), dp(20), dp(9))
+            setBackgroundColor(cBackground)
         }
         val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        heading.addView(TextView(this).apply {
-            text = "Your library"
-            textSize = 23f
-            setTextColor(Color.WHITE)
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        heading.addView(Button(this).apply {
-            text = "↻"
-            contentDescription = "Rescan music library"
-            setOnClickListener { requestLibraryPermissionOrLoad() }
-            styleButton(this, compact = true)
-        })
-        page.addView(heading)
+        val headingCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        headingCopy.addView(uiText(if (searchMode) "Search" else "Your library", 25f, cText, true))
+        headingCopy.addView(uiText(if (searchMode) "Find a track, album or artist." else "Everything you have saved, together.", 11.5f, cMuted).apply { setPadding(0, dp(5), 0, 0) })
+        heading.addView(headingCopy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (!searchMode) {
+            heading.addView(iconControl(R.drawable.ic_refresh, "Rescan music library", 42, cSurface) { requestLibraryPermissionOrLoad() },
+                LinearLayout.LayoutParams(dp(42), dp(42)))
+        }
+        page.addView(heading, matchWrap().apply { bottomMargin = dp(15) })
+
+        val searchWrap = roundedCard(cSurface, 17).apply { strokeColor = cBorder; strokeWidth = dp(1) }
+        val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(13), 0, dp(12), 0) }
+        val searchIcon = ImageView(this).apply { setImageResource(R.drawable.ic_search); imageTintList = ColorStateList.valueOf(cMuted) }
+        searchRow.addView(searchIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(10) })
         val search = EditText(this).apply {
-            hint = "Search songs, artists, albums"
+            hint = "Search your music"
             setSingleLine(true)
             textSize = 14f
-            setTextColor(Color.WHITE)
-            setHintTextColor(Color.rgb(137, 157, 169))
-            backgroundTintList = ColorStateList.valueOf(Color.rgb(75, 110, 122))
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setTextColor(cText)
+            setHintTextColor(cMuted)
+            background = null
+            setPadding(0, dp(12), 0, dp(12))
             setText(currentSearch)
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
         }
-        page.addView(search, matchWrap().apply { topMargin = dp(8); bottomMargin = dp(8) })
+        searchRow.addView(search, LinearLayout.LayoutParams(0, dp(48), 1f))
+        if (currentSearch.isNotBlank()) {
+            searchRow.addView(iconControl(R.drawable.ic_back, "Clear search", 30, Color.TRANSPARENT, cMuted) {
+                search.setText("")
+            }, LinearLayout.LayoutParams(dp(30), dp(30)))
+        }
+        searchWrap.addView(searchRow)
+        page.addView(searchWrap, matchWrap().apply { bottomMargin = dp(13) })
+        librarySearchField = search
 
-        val tabScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
-        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(LIBRARY_SONGS, LIBRARY_ALBUMS, LIBRARY_ARTISTS, LIBRARY_FAVOURITES, LIBRARY_PLAYLISTS).forEach { tab ->
-            tabs.addView(Button(this).apply {
-                text = tab
-                styleButton(this, compact = true)
-                if (currentLibraryTab == tab) backgroundTintList = ColorStateList.valueOf(Color.rgb(24, 116, 111))
-                setOnClickListener {
-                    currentLibraryTab = tab
-                    currentAlbum = null
-                    currentArtist = null
-                    currentPlaylist = null
-                    showLibrary()
-                }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { marginEnd = dp(5) })
+        val categories = ChipGroup(this).apply {
+            isSingleSelection = true
+            isSingleLine = true
+            chipSpacingHorizontal = dp(7)
+            chipSpacingVertical = 0
         }
-        tabScroll.addView(tabs)
-        page.addView(tabScroll)
+        listOf(LIBRARY_SONGS, LIBRARY_ALBUMS, LIBRARY_ARTISTS, LIBRARY_FAVOURITES, LIBRARY_PLAYLISTS).forEach { tab ->
+            val chip = Chip(this).apply {
+                text = when (tab) { LIBRARY_FAVOURITES -> "Liked"; LIBRARY_PLAYLISTS -> "Playlists"; else -> tab }
+                isCheckable = true
+                isChecked = currentLibraryTab == tab
+                isClickable = true
+                chipCornerRadius = dp(15).toFloat()
+                chipStrokeWidth = dp(1).toFloat()
+                chipStrokeColor = ColorStateList.valueOf(if (isChecked) cAccent else cBorder)
+                chipBackgroundColor = ColorStateList.valueOf(if (isChecked) cAccentDeep else cSurface)
+                setTextColor(if (isChecked) cAccent else cMuted)
+                textSize = 11f
+                setEnsureMinTouchTargetSize(false)
+                setOnClickListener {
+                    if (currentLibraryTab != tab) {
+                        currentLibraryTab = tab
+                        currentAlbum = null; currentArtist = null; currentPlaylist = null
+                        if (searchMode) showSearch() else showLibrary()
+                    }
+                }
+            }
+            categories.addView(chip)
+        }
+        page.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(categories)
+        }, matchWrap().apply { bottomMargin = dp(8) })
 
         val detail = currentAlbum ?: currentArtist ?: currentPlaylist
         if (detail != null) {
-            page.addView(Button(this).apply {
-                text = "← Back to ${currentLibraryTab.lowercase()}"
-                styleButton(this, compact = true)
-                gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                setOnClickListener { currentAlbum = null; currentArtist = null; currentPlaylist = null; showLibrary() }
-            }, matchWrap().apply { topMargin = dp(5); bottomMargin = dp(4) })
+            val back = MaterialButton(this).apply {
+                text = "‹   ${currentLibraryTab.uppercase()}"
+                isAllCaps = false
+                textSize = 10f
+                cornerRadius = dp(12)
+                insetTop = 0; insetBottom = 0
+                minHeight = dp(34)
+                backgroundTintList = ColorStateList.valueOf(cSurface)
+                setTextColor(cAccent)
+                setOnClickListener { currentAlbum = null; currentArtist = null; currentPlaylist = null; if (searchMode) showSearch() else showLibrary() }
+            }
+            page.addView(back, matchWrap().apply { bottomMargin = dp(5) })
         }
 
         val sortRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val count = TextView(this).apply { textSize = 12f; setTextColor(Color.rgb(156, 176, 188)) }
+        val count = uiText("", 11f, cMuted)
+        libraryCountLabel = count
         sortRow.addView(count, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val sort = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                arrayOf(SORT_TITLE, SORT_ARTIST, SORT_ALBUM, SORT_RECENT))
-            setSelection(arrayOf(SORT_TITLE, SORT_ARTIST, SORT_ALBUM, SORT_RECENT).indexOf(currentSort).coerceAtLeast(0))
-            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                    currentSort = arrayOf(SORT_TITLE, SORT_ARTIST, SORT_ALBUM, SORT_RECENT)[position]
-                    if (libraryListContainer != null) renderLibraryItems(count)
+        val sortButton = MaterialButton(this).apply {
+            text = "Sort  ·  $currentSort"
+            isAllCaps = false
+            textSize = 10.5f
+            cornerRadius = dp(12)
+            insetTop = 0; insetBottom = 0
+            minHeight = dp(34)
+            backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+            setTextColor(cMuted)
+            setPadding(dp(7), 0, dp(7), 0)
+            setOnClickListener {
+                val menu = android.widget.PopupMenu(this@MainActivity, this)
+                arrayOf(SORT_TITLE, SORT_ARTIST, SORT_ALBUM, SORT_RECENT).forEach { menu.menu.add(it) }
+                menu.setOnMenuItemClickListener { item ->
+                    currentSort = item.title.toString()
+                    text = "Sort  ·  $currentSort"
+                    renderLibraryItems(libraryCountLabel)
+                    true
                 }
+                menu.show()
             }
         }
-        sortRow.addView(sort, LinearLayout.LayoutParams(dp(150), dp(42)))
-        page.addView(sortRow)
+        sortRow.addView(sortButton)
+        page.addView(sortRow, matchWrap().apply { topMargin = dp(5); bottomMargin = dp(5) })
 
-        libraryListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val listScroll = ScrollView(this).apply { isFillViewport = true; addView(libraryListContainer) }
+        libraryListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(3), 0, dp(15)) }
+        val listScroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false; addView(libraryListContainer) }
         page.addView(listScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentSearch = s?.toString().orEmpty()
-                renderLibraryItems()
+                renderLibraryItems(libraryCountLabel)
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -648,7 +935,7 @@ class MainActivity : Activity() {
                 .filter { query.isBlank() || it.key.first.lowercase().contains(query) || it.key.second.lowercase().contains(query) }
             groups.forEach { entry ->
                 val representative = entry.value.first()
-                addLibraryCollectionRow(container, entry.key.first, entry.key.second, "${entry.value.size} songs") {
+                addLibraryCollectionRow(container, entry.key.first, entry.key.second, "${entry.value.size} tracks", representative) {
                     currentAlbum = entry.key.first
                     showLibrary()
                 }
@@ -656,17 +943,17 @@ class MainActivity : Activity() {
         } else if (currentLibraryTab == LIBRARY_ARTISTS && currentArtist == null) {
             libraryTracks.groupBy { it.artist }.entries.sortedBy { it.key.lowercase() }
                 .filter { query.isBlank() || it.key.lowercase().contains(query) }
-                .forEach { entry -> addLibraryCollectionRow(container, entry.key, "Artist", "${entry.value.size} songs") {
+                .forEach { entry -> addLibraryCollectionRow(container, entry.key, "Artist", "${entry.value.size} tracks", entry.value.first()) {
                     currentArtist = entry.key
                     showLibrary()
                 } }
         } else if (currentLibraryTab == LIBRARY_PLAYLISTS && currentPlaylist == null) {
-            addLibraryCollectionRow(container, PlaylistStore.FAVOURITES_NAME, "Your saved tracks", "${playlistStore.favourites().size} songs") {
+            addLibraryCollectionRow(container, PlaylistStore.FAVOURITES_NAME, "Your saved tracks", "${playlistStore.favourites().size} tracks", libraryTracks.firstOrNull { playlistStore.isFavourite(it.id) }) {
                 currentPlaylist = PlaylistStore.FAVOURITES_NAME
                 showLibrary()
             }
             playlistStore.playlists().forEach { name ->
-                addLibraryCollectionRow(container, name, "Playlist", "${playlistStore.trackIds(name).size} songs") {
+                addLibraryCollectionRow(container, name, "Playlist", "${playlistStore.trackIds(name).size} tracks", libraryTracks.firstOrNull { it.id in playlistStore.trackIds(name) }) {
                     currentPlaylist = name
                     showLibrary()
                 }
@@ -691,63 +978,64 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun addLibraryCollectionRow(parent: LinearLayout, title: String, subtitle: String, trailing: String, click: () -> Unit) {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setBackgroundColor(Color.rgb(22, 33, 43))
+    private fun addLibraryCollectionRow(
+        parent: LinearLayout,
+        title: String,
+        subtitle: String,
+        trailing: String,
+        artTrack: MusicTrack? = null,
+        click: () -> Unit
+    ) {
+        val row = roundedCard(cSurface, 18).apply {
+            isClickable = true
+            isFocusable = true
             setOnClickListener { click() }
         }
-        val art = TextView(this).apply {
-            text = "♫"
-            textSize = 24f
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(128, 203, 196))
-            setBackgroundColor(Color.rgb(36, 57, 68))
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(11), dp(10), dp(12), dp(10))
         }
-        row.addView(art, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(12) })
+        content.addView(artwork(artTrack, 56, 13), LinearLayout.LayoutParams(dp(56), dp(56)).apply { marginEnd = dp(13) })
         val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        text.addView(TextView(this).apply { this.text = title; textSize = 15f; setTextColor(Color.WHITE); maxLines = 1 })
-        text.addView(TextView(this).apply { this.text = subtitle; textSize = 12f; setTextColor(Color.rgb(154, 175, 188)); maxLines = 1 })
-        row.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(TextView(this).apply { this.text = trailing; textSize = 11f; setTextColor(Color.rgb(154, 175, 188)) })
-        parent.addView(row, matchWrap().apply { topMargin = dp(5) })
+        text.addView(uiText(title, 14f, cText, true).apply { maxLines = 1 })
+        text.addView(uiText(subtitle, 11f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) })
+        content.addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        content.addView(uiText(trailing, 10f, cMuted).apply { setPadding(dp(7), 0, dp(3), 0) })
+        content.addView(uiText("›", 23f, cAccent).apply { setPadding(dp(4), 0, 0, 0) })
+        row.addView(content)
+        parent.addView(row, matchWrap().apply { topMargin = dp(6) })
     }
 
     private fun addTrackRow(parent: LinearLayout, track: MusicTrack, queueTracks: List<MusicTrack>, index: Int) {
-        val row = LinearLayout(this).apply {
+        displayedTracks = queueTracks
+        val row = roundedCard(cSurface, 17).apply {
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { playTracks(queueTracks, index) }
+        }
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(8), dp(4), dp(8))
-            setBackgroundColor(Color.rgb(20, 30, 40))
+            setPadding(dp(9), dp(9), dp(8), dp(9))
         }
-        val art = TextView(this).apply {
-            text = "♫"
-            textSize = 21f
-            gravity = Gravity.CENTER
-            setTextColor(Color.rgb(128, 203, 196))
-            setBackgroundColor(Color.rgb(36, 57, 68))
-        }
-        row.addView(art, LinearLayout.LayoutParams(dp(46), dp(46)).apply { marginEnd = dp(10) })
+        content.addView(artwork(track, 54, 12), LinearLayout.LayoutParams(dp(54), dp(54)).apply { marginEnd = dp(11) })
         val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        info.addView(TextView(this).apply { text = track.title; textSize = 14f; setTextColor(Color.WHITE); maxLines = 1 })
-        info.addView(TextView(this).apply { text = "${track.artist}  ·  ${track.album}"; textSize = 11f; setTextColor(Color.rgb(153, 173, 186)); maxLines = 1 })
-        row.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(TextView(this).apply { text = track.durationLabel; textSize = 11f; setTextColor(Color.rgb(153, 173, 186)); setPadding(dp(4), 0, dp(5), 0) })
-        row.addView(Button(this).apply {
-            text = "⋮"
-            contentDescription = "More actions for ${track.title}"
-            styleButton(this, compact = true)
-            setOnClickListener { showTrackActions(track) }
-        })
-        row.setOnClickListener { playTracks(queueTracks, index) }
+        info.addView(uiText(track.title, 13f, cText, true).apply { maxLines = 1 })
+        info.addView(uiText(track.artist, 10.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) })
+        content.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        content.addView(uiText(track.durationLabel, 10f, cMuted).apply { setPadding(dp(4), 0, dp(2), 0) })
+        content.addView(iconControl(R.drawable.ic_more, "More actions for ${track.title}", 38, Color.TRANSPARENT, cMuted) {
+            showTrackActions(track)
+        }, LinearLayout.LayoutParams(dp(38), dp(38)).apply { marginStart = dp(5) })
+        row.addView(content)
         row.setOnLongClickListener { showTrackActions(track); true }
-        parent.addView(row, matchWrap().apply { topMargin = dp(5) })
+        parent.addView(row, matchWrap().apply { topMargin = dp(6) })
     }
 
     private fun playTracks(tracks: List<MusicTrack>, index: Int) {
         if (tracks.isEmpty() || index !in tracks.indices) return
+        if (activeDestination != DEST_NOW_PLAYING) returnDestination = activeDestination
         currentNowPlaying = tracks[index]
         if (playback != null) playback?.playQueue(tracks, index) else pendingQueue = tracks to index
         if (::trackTitle.isInitialized) trackTitle.text = tracks[index].title
@@ -796,89 +1084,138 @@ class MainActivity : Activity() {
     }
 
     private fun showNowPlaying() {
+        if (activeDestination != DEST_NOW_PLAYING) returnDestination = activeDestination
+        activeDestination = DEST_NOW_PLAYING
+        updateNavigationState()
         contentFrame.removeAllViews()
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(22), dp(18), dp(22), dp(18))
-            setBackgroundColor(Color.rgb(12, 18, 25))
-        }
+
         val entry = playback?.currentEntry()
         val track = entry?.let { active -> libraryTracks.firstOrNull { it.uri == active.uri } } ?: currentNowPlaying
-        val art = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.rgb(29, 47, 59))
-            track?.albumArtUri?.let { runCatching { setImageURI(it) } }
+        val page = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackground(GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.rgb(27, 53, 58), Color.rgb(16, 27, 35), cBackground)))
         }
-        page.addView(art, LinearLayout.LayoutParams(dp(248), dp(248)).apply { bottomMargin = dp(22) })
-        val title = TextView(this).apply {
-            text = entry?.title ?: track?.title ?: "Nothing playing"
-            textSize = 22f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            maxLines = 2
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(24), dp(12), dp(24), dp(26))
         }
-        page.addView(title, matchWrap())
-        page.addView(TextView(this).apply {
-            text = listOfNotNull(entry?.artist ?: track?.artist, entry?.album ?: track?.album).distinct().joinToString(" · ")
-            textSize = 13f
-            setTextColor(Color.rgb(158, 180, 192))
-            gravity = Gravity.CENTER
-            setPadding(0, dp(5), 0, dp(12))
-        }, matchWrap())
-        val position = TextView(this).apply { text = "0:00  /  ${track?.durationLabel ?: "0:00"}"; textSize = 11f; setTextColor(Color.rgb(170, 190, 200)) }
-        nowPlayingSeekBar = SeekBar(this).apply {
-            max = 1000
-            progress = 0
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) userSeeking = true
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) { userSeeking = true }
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+        val topBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        topBar.addView(iconControl(R.drawable.ic_back, "Back", 42, Color.rgb(33, 52, 58)) {
+            when (returnDestination) {
+                DEST_LIBRARY -> showLibrary()
+                DEST_SEARCH -> showSearch()
+                DEST_SOUND -> showDsp()
+                else -> showHome()
+            }
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        val topTitle = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+        topTitle.addView(uiText("NOW PLAYING", 10f, cText, true).apply { gravity = Gravity.CENTER; letterSpacing = 0.16f })
+        topTitle.addView(uiText("AURALIS PLAYER", 8f, cMuted).apply { gravity = Gravity.CENTER; setPadding(0, dp(3), 0, 0) })
+        topBar.addView(topTitle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        topBar.addView(iconControl(R.drawable.ic_queue, "Playback queue", 42, Color.rgb(33, 52, 58)) { showQueueDialog() },
+            LinearLayout.LayoutParams(dp(42), dp(42)))
+        content.addView(topBar, matchWrap().apply { bottomMargin = dp(18) })
+
+        val artworkSize = (resources.displayMetrics.widthPixels / resources.displayMetrics.density).toInt().minus(56).coerceIn(220, 318)
+        content.addView(artwork(track, artworkSize, 25), LinearLayout.LayoutParams(dp(artworkSize), dp(artworkSize)).apply {
+            bottomMargin = dp(25)
+        })
+
+        val infoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val songInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        songInfo.addView(uiText(if (entry != null || track != null) "NOW PLAYING" else "READY TO PLAY", 9f, cAccent, true).apply { letterSpacing = 0.13f })
+        songInfo.addView(uiText(entry?.title ?: track?.title ?: "Choose your music", 23f, cText, true).apply {
+            maxLines = 2; setPadding(0, dp(7), 0, dp(4))
+        })
+        songInfo.addView(uiText(entry?.artist ?: track?.artist ?: "Your library is waiting", 13f, cMuted).apply { maxLines = 1 })
+        infoRow.addView(songInfo, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (track != null) {
+            val saved = playlistStore.isFavourite(track.id)
+            infoRow.addView(iconControl(R.drawable.ic_favorite, if (saved) "Remove from favourites" else "Add to favourites", 44,
+                if (saved) cAccentDeep else cSurfaceSoft, if (saved) cAccent else cMuted) {
+                playlistStore.toggleFavourite(track.id)
+                showNowPlaying()
+            })
+        }
+        content.addView(infoRow, matchWrap().apply { bottomMargin = dp(16) })
+
+        nowPlayingSeekBar = Slider(this).apply {
+            valueFrom = 0f
+            valueTo = 1000f
+            stepSize = 1f
+            value = 0f
+            addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+                override fun onStartTrackingTouch(slider: Slider) { userSeeking = true }
+                override fun onStopTrackingTouch(slider: Slider) {
                     userSeeking = false
                     val duration = playback?.playbackDurationMs() ?: track?.durationMs ?: 0L
-                    if (duration > 0L) playback?.seekTo(duration * (seekBar?.progress ?: 0) / 1000L)
+                    if (duration > 0L) playback?.seekTo((duration * slider.value / 1000.0).toLong())
                 }
             })
         }
-        page.addView(nowPlayingSeekBar, matchWrap())
-        page.addView(position)
-        nowPositionLabel = position
+        content.addView(nowPlayingSeekBar, matchWrap())
+        val timeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        nowPositionLabel = uiText("0:00", 10f, cMuted)
+        nowDurationLabel = uiText(formatTime(playback?.playbackDurationMs() ?: track?.durationMs ?: 0L), 10f, cMuted)
+        timeRow.addView(nowPositionLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        timeRow.addView(nowDurationLabel)
+        content.addView(timeRow, matchWrap().apply { bottomMargin = dp(17) })
 
-        val transport = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        transport.addView(Button(this).apply {
-            text = if (playback?.isShuffleEnabled() == true) "🔀 ON" else "SHUFFLE"
-            styleButton(this, compact = true)
-            setOnClickListener { playback?.setShuffle(playback?.isShuffleEnabled() != true); showNowPlaying() }
-        })
-        transport.addView(Button(this).apply { text = "|◀"; styleButton(this); setOnClickListener { playback?.skipToPrevious(); updateMiniPlayer() } })
-        transport.addView(Button(this).apply { text = if (playback?.isPlaying() == true) "Ⅱ" else "▶"; styleButton(this); setOnClickListener { togglePlayback(); showNowPlaying() } })
-        transport.addView(Button(this).apply { text = "▶|"; styleButton(this); setOnClickListener { playback?.skipToNext(); updateMiniPlayer() } })
-        transport.addView(Button(this).apply {
-            text = when (playback?.getRepeatMode() ?: 0) { PlaybackService.REPEAT_ALL -> "REPEAT ALL"; PlaybackService.REPEAT_ONE -> "REPEAT ONE"; else -> "REPEAT OFF" }
-            styleButton(this, compact = true)
-            setOnClickListener { playback?.setRepeatMode(((playback?.getRepeatMode() ?: 0) + 1) % 3); showNowPlaying() }
-        })
-        page.addView(transport, matchWrap().apply { topMargin = dp(18) })
-        val activeTrack = track
-        if (activeTrack != null) page.addView(Button(this).apply {
-            text = if (playlistStore.isFavourite(activeTrack.id)) "♥  REMOVE FROM FAVOURITES" else "♡  ADD TO FAVOURITES"
-            styleButton(this, compact = true)
-            setOnClickListener {
-                val saved = playlistStore.toggleFavourite(activeTrack.id)
-                text = if (saved) "♥  REMOVE FROM FAVOURITES" else "♡  ADD TO FAVOURITES"
-            }
-        }, matchWrap().apply { topMargin = dp(10) })
-        val queueButton = Button(this).apply { text = "PLAYBACK QUEUE (${playback?.queueSize() ?: 0})"; styleButton(this); setOnClickListener { showQueueDialog() } }
-        page.addView(queueButton, matchWrap().apply { topMargin = dp(16) })
-        page.addView(Button(this).apply { text = "OPEN DSP / SOUND SETTINGS"; styleButton(this); setOnClickListener { showDsp() } }, matchWrap().apply { topMargin = dp(8) })
-        contentFrame.addView(ScrollView(this).apply { addView(page) }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        controls.addView(iconControl(R.drawable.ic_shuffle, "Toggle shuffle", 42, Color.TRANSPARENT,
+            if (playback?.isShuffleEnabled() == true) cAccent else cMuted) {
+            playback?.setShuffle(playback?.isShuffleEnabled() != true); showNowPlaying()
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        controls.addView(iconControl(R.drawable.ic_skip_previous, "Previous track", 48, Color.TRANSPARENT, cText) {
+            playback?.skipToPrevious(); updateMiniPlayer(); showNowPlaying()
+        }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(8) })
+        val play = MaterialButton(this).apply {
+            text = ""
+            setIconResource(if (playback?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play)
+            iconTint = ColorStateList.valueOf(Color.rgb(6, 29, 23))
+            iconSize = dp(29)
+            iconPadding = 0
+            cornerRadius = dp(31)
+            insetTop = 0; insetBottom = 0
+            minWidth = dp(64); minHeight = dp(64)
+            backgroundTintList = ColorStateList.valueOf(cAccent)
+            elevation = dp(3).toFloat()
+            setOnClickListener { togglePlayback(); showNowPlaying() }
+        }
+        controls.addView(play, LinearLayout.LayoutParams(dp(64), dp(64)).apply { marginStart = dp(8); marginEnd = dp(8) })
+        controls.addView(iconControl(R.drawable.ic_skip_next, "Next track", 48, Color.TRANSPARENT, cText) {
+            playback?.skipToNext(); updateMiniPlayer(); showNowPlaying()
+        }, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(8) })
+        controls.addView(iconControl(R.drawable.ic_repeat, "Cycle repeat mode", 42, Color.TRANSPARENT,
+            if ((playback?.getRepeatMode() ?: 0) != PlaybackService.REPEAT_OFF) cAccent else cMuted) {
+            playback?.setRepeatMode(((playback?.getRepeatMode() ?: 0) + 1) % 3); showNowPlaying()
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        content.addView(controls, matchWrap().apply { bottomMargin = dp(18) })
+
+        val repeatLabel = when (playback?.getRepeatMode() ?: 0) {
+            PlaybackService.REPEAT_ALL -> "Repeat all"
+            PlaybackService.REPEAT_ONE -> "Repeat one"
+            else -> "Repeat off"
+        }
+        content.addView(uiText("${if (playback?.isShuffleEnabled() == true) "Shuffle on" else "Shuffle off"}   ·   $repeatLabel", 10f, cMuted).apply { gravity = Gravity.CENTER })
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(materialAction("Playback queue", false, true).apply {
+            setOnClickListener { showQueueDialog() }
+        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginEnd = dp(6) })
+        actions.addView(materialAction("Sound studio", false, true).apply {
+            setOnClickListener { showDsp() }
+        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { marginStart = dp(6) })
+        content.addView(actions, matchWrap().apply { topMargin = dp(23) })
+
+        scroll.addView(content)
+        page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        contentFrame.addView(page, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         updateMiniPlayer()
     }
-
-    private lateinit var nowPlayingSeekBar: SeekBar
-    private lateinit var nowPositionLabel: TextView
 
     private fun showQueueDialog() {
         val entries = playback?.queueSnapshot().orEmpty()
@@ -893,7 +1230,7 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle("Playback queue").setItems(labels.toTypedArray()) { _, which ->
             currentNowPlaying = libraryTracks.firstOrNull { it.uri == entries[which].uri } ?: currentNowPlaying
             playback?.skipToQueueIndex(which)
-            updateMiniPlayer()
+            showNowPlaying()
         }.setNeutralButton("Clear queue") { _, _ -> playback?.clearQueue(); currentNowPlaying = null; updateMiniPlayer() }.show()
     }
 
@@ -905,12 +1242,26 @@ class MainActivity : Activity() {
     }
 
     private fun updateMiniPlayer() {
-        if (!::miniTitle.isInitialized) return
+        if (!::miniTitle.isInitialized || !::miniPlayerCard.isInitialized) return
         val entry = playback?.currentEntry()
         val track = entry?.let { e -> libraryTracks.firstOrNull { it.uri == e.uri } } ?: currentNowPlaying
         miniTitle.text = entry?.title ?: track?.title ?: "Nothing playing"
-        miniSubtitle.text = entry?.artist ?: track?.artist ?: "Choose music from your library"
-        if (::miniPlayButton.isInitialized) miniPlayButton.text = if (playback?.isPlaying() == true) "Ⅱ" else "▶"
+        miniSubtitle.text = entry?.artist ?: track?.artist ?: "Choose a track from your library"
+        if (track?.albumArtUri != null) {
+            miniArtwork.imageTintList = null
+            miniArtwork.setPadding(0, 0, 0, 0)
+            runCatching { miniArtwork.setImageURI(track.albumArtUri) }
+        } else {
+            miniArtwork.setImageResource(R.drawable.ic_music_note)
+            miniArtwork.imageTintList = ColorStateList.valueOf(cAccent)
+            miniArtwork.setPadding(dp(12), dp(12), dp(12), dp(12))
+        }
+        miniPlayerCard.visibility = if (entry != null || track != null) {
+            if (activeDestination == DEST_NOW_PLAYING) View.GONE else View.VISIBLE
+        } else View.GONE
+        if (::miniPlayButton.isInitialized) {
+            miniPlayButton.setIconResource(if (playback?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play)
+        }
     }
 
     private val progressTicker = object : Runnable {
@@ -920,8 +1271,9 @@ class MainActivity : Activity() {
                 val duration = service.playbackDurationMs()
                 val position = service.playbackPositionMs()
                 if (::nowPlayingSeekBar.isInitialized && !userSeeking && duration > 0L) {
-                    nowPlayingSeekBar.progress = ((position.coerceAtMost(duration) * 1000L) / duration).toInt()
-                    if (::nowPositionLabel.isInitialized) nowPositionLabel.text = "${formatTime(position)}  /  ${formatTime(duration)}"
+                    nowPlayingSeekBar.value = ((position.coerceAtMost(duration) * 1000L) / duration).toFloat()
+                    if (::nowPositionLabel.isInitialized) nowPositionLabel.text = formatTime(position)
+                    if (::nowDurationLabel.isInitialized) nowDurationLabel.text = formatTime(duration)
                 }
                 updateMiniPlayer()
             }
@@ -944,38 +1296,39 @@ class MainActivity : Activity() {
         channel: Int = 0,
         initialGainDb: Double = 0.0
     ) {
+        val card = roundedCard(cSurfaceRaised, 16)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(10))
-            setBackgroundColor(Color.rgb(25, 36, 45))
+            setPadding(dp(12), dp(9), dp(12), dp(10))
         }
-        val toggle = CheckBox(this).apply {
+        val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val toggle = MaterialSwitch(this).apply {
             text = title
-            setTextColor(Color.WHITE)
+            textSize = 11f
+            setTextColor(cText)
         }
-        val value = label("Gain: 0.0 dB")
-        val gain = SeekBar(this).apply {
-            max = 300
-            progress = ((initialGainDb.coerceIn(-15.0, 15.0) * 10.0) + 150.0).toInt()
+        heading.addView(toggle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(heading)
+        val value = uiText("Gain: 0.0 dB", 10f, cMuted).apply { setPadding(0, dp(5), 0, 0) }
+        val gain = Slider(this).apply {
+            valueFrom = 0f
+            valueTo = 300f
+            stepSize = 1f
+            value = ((initialGainDb.coerceIn(-15.0, 15.0) * 10.0) + 150.0).toFloat()
         }
         val control = EqUiControl(index, type, frequency, q, channel, toggle, gain, value)
         eqControls.add(control)
-
         fun update() {
-            val db = (gain.progress - 150) / 10.0
+            val db = (gain.value.toInt() - 150) / 10.0
             value.text = "Gain: ${"%.1f".format(db)} dB"
             playback?.setEqBand(index, toggle.isChecked, type, frequency, q, db, channel)
         }
         toggle.setOnCheckedChangeListener { _, _ -> update() }
-        gain.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) = update()
-            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-        })
-        box.addView(toggle)
+        gain.addOnChangeListener { _, _, _ -> update() }
         box.addView(value)
-        box.addView(gain)
-        parent.addView(box, matchWrap().apply { topMargin = dp(8) })
+        box.addView(gain, matchWrap())
+        card.addView(box)
+        parent.addView(card, matchWrap().apply { topMargin = dp(7) })
         updateEqCount()
     }
 
@@ -1135,30 +1488,47 @@ class MainActivity : Activity() {
     private fun applyReplayGain() {
         if (!::replayDefaultSlider.isInitialized || !::replayPreampSlider.isInitialized) return
         playback?.setReplayGain(replayMode, replaySource,
-            (replayDefaultSlider.progress - 150) * 10)
-        playback?.setMasterGainDb((replayPreampSlider.progress - 150) / 10.0)
+            (replayDefaultSlider.value.toInt() - 150) * 10)
+        playback?.setMasterGainDb((replayPreampSlider.value.toInt() - 150) / 10.0)
         getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
-            .putInt(KEY_MASTER_PREAMP, replayPreampSlider.progress).apply()
+            .putInt(KEY_MASTER_PREAMP, replayPreampSlider.value.toInt()).apply()
     }
 
     private fun syncControls() {
         playback?.setReverbEnabled(reverbToggle.isChecked)
         reverbSliders.forEachIndexed { index, slider ->
-            slider?.let { playback?.setReverbParameter(index, it.progress / 100.0) }
+            slider?.let { playback?.setReverbParameter(index, it.value / 100.0) }
         }
-        playback?.setStereoWide(stereoToggle.isChecked, stereoSlider.progress)
-        playback?.setBalance(balanceToggle.isChecked, (balanceSlider.progress - 100) / 100.0)
+        playback?.setStereoWide(stereoToggle.isChecked, stereoSlider.value.toInt())
+        playback?.setBalance(balanceToggle.isChecked, (balanceSlider.value - 100f) / 100.0)
         playback?.setMono(monoToggle.isChecked)
         playback?.setLimiter(limiterToggle.isChecked, limiterPath)
         applyReplayGain()
         eqControls.forEach { c ->
-            val db = (c.gain.progress - 150) / 10.0
+            val db = (c.gain.value.toInt() - 150) / 10.0
             playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, c.channel)
         }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
     private fun matchWrap() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+
+    @Deprecated("Use platform back navigation")
+    override fun onBackPressed() {
+        val target = when (activeDestination) {
+            DEST_NOW_PLAYING -> returnDestination
+            DEST_SOUND -> soundReturnDestination
+            else -> null
+        }
+        when (target) {
+            DEST_LIBRARY -> showLibrary()
+            DEST_SEARCH -> showSearch()
+            DEST_NOW_PLAYING -> showNowPlaying()
+            DEST_SOUND -> showDsp()
+            DEST_HOME -> showHome()
+            else -> super.onBackPressed()
+        }
+    }
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(progressTicker)
@@ -1174,12 +1544,17 @@ class MainActivity : Activity() {
         val frequency: Int,
         val q: Double,
         val channel: Int,
-        val enabled: CheckBox,
-        val gain: SeekBar,
+        val enabled: CompoundButton,
+        val gain: Slider,
         val value: TextView
     )
 
     companion object {
+        private const val DEST_HOME = "home"
+        private const val DEST_SEARCH = "search"
+        private const val DEST_LIBRARY = "library"
+        private const val DEST_SOUND = "sound"
+        private const val DEST_NOW_PLAYING = "now_playing"
         private const val REQUEST_AUDIO = 8201
         private const val REQUEST_LIBRARY_PERMISSION = 8202
         private const val PREFERENCES = "auralis.player"
@@ -1189,7 +1564,6 @@ class MainActivity : Activity() {
         private const val LIBRARY_ARTISTS = "Artists"
         private const val LIBRARY_FAVOURITES = "Favourites"
         private const val LIBRARY_PLAYLISTS = "Playlists"
-        private const val LIBRARY_DSP = "DSP"
         private const val SORT_TITLE = "Title"
         private const val SORT_ARTIST = "Artist"
         private const val SORT_ALBUM = "Album"
