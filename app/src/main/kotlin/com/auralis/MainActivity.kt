@@ -10,6 +10,8 @@ import android.content.res.ColorStateList
 import android.content.Intent
 import android.content.ServiceConnection
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -18,6 +20,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.IBinder
 import android.provider.OpenableColumns
+import android.util.LruCache
+import android.util.Size
 import android.text.InputType
 import android.text.Editable
 import android.text.TextWatcher
@@ -45,6 +49,10 @@ import com.google.android.material.chip.Chip
 import com.google.android.material.chip.ChipGroup
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.slider.Slider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     private var playback: PlaybackService? = null
@@ -106,6 +114,15 @@ class MainActivity : Activity() {
     private lateinit var nowPositionLabel: TextView
     private lateinit var nowDurationLabel: TextView
     private val eqControls = mutableListOf<EqUiControl>()
+    private val artworkExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+    private val artworkCache = object : LruCache<String, Bitmap>(12 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+    private var activityStarted = false
+    private var pendingSearchRender: Runnable? = null
+    private var libraryPageTracks: List<MusicTrack> = emptyList()
+    private var libraryRenderedCount = 0
+
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -117,7 +134,7 @@ class MainActivity : Activity() {
             if (::reverbToggle.isInitialized) syncControls()
             updateMiniPlayer()
             uiHandler.removeCallbacks(progressTicker)
-            uiHandler.post(progressTicker)
+            if (activityStarted) uiHandler.post(progressTicker)
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             playback = null
@@ -221,11 +238,8 @@ class MainActivity : Activity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 intArrayOf(Color.rgb(38, 91, 83), Color.rgb(48, 58, 89), Color.rgb(30, 40, 54)))
-            if (track?.albumArtUri != null) {
-                val loaded = runCatching { imageTintList = null; setPadding(0, 0, 0, 0); setImageURI(track.albumArtUri); drawable != null }.getOrDefault(false)
-                if (!loaded) setPlaceholderArtwork(this)
-            } else setPlaceholderArtwork(this)
         }
+        bindArtwork(image, track?.albumArtUri, size)
         card.addView(image, FrameLayout.LayoutParams(dp(size), dp(size)))
         card.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size))
         return card
@@ -236,6 +250,74 @@ class MainActivity : Activity() {
         image.imageTintList = ColorStateList.valueOf(Color.rgb(170, 229, 213))
         image.setPadding(dp(22), dp(22), dp(22), dp(22))
         image.scaleType = ImageView.ScaleType.CENTER_INSIDE
+    }
+
+    /**
+     * Album art is decoded away from the main thread and cached. The URI tag prevents
+     * a slow image request from replacing artwork after a view has been rebound.
+     */
+    private fun bindArtwork(image: ImageView, uri: Uri?, targetSizeDp: Int) {
+        if (uri == null) {
+            if (image.tag != NO_ARTWORK_TAG) {
+                image.tag = NO_ARTWORK_TAG
+                setPlaceholderArtwork(image)
+            }
+            return
+        }
+
+        val key = uri.toString()
+        if (image.tag == key) return
+        image.tag = key
+
+        val cached = artworkCache.get(key)
+        if (cached != null) {
+            image.imageTintList = null
+            image.setPadding(0, 0, 0, 0)
+            image.setImageBitmap(cached)
+            return
+        }
+
+        setPlaceholderArtwork(image)
+        val targetPx = dp(targetSizeDp).coerceAtLeast(64)
+        artworkExecutor.execute {
+            val bitmap = runCatching {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    contentResolver.loadThumbnail(uri, Size(targetPx, targetPx), null)
+                } else {
+                    decodeLegacyArtwork(uri, targetPx)
+                }
+            }.getOrNull()
+
+            if (bitmap != null) artworkCache.put(key, bitmap)
+            if (!isFinishing && !isDestroyed) {
+                runOnUiThread {
+                    if (image.tag == key) {
+                        if (bitmap != null) {
+                            image.imageTintList = null
+                            image.setPadding(0, 0, 0, 0)
+                            image.setImageBitmap(bitmap)
+                        } else {
+                            setPlaceholderArtwork(image)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun decodeLegacyArtwork(uri: Uri, targetPx: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        var sample = 1
+        val largestSide = maxOf(bounds.outWidth, bounds.outHeight)
+        while (largestSide / sample > targetPx * 2 && sample < 32) sample *= 2
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
     }
 
     private fun sectionHeading(parent: LinearLayout, title: String, action: String? = null, onAction: (() -> Unit)? = null) {
@@ -370,7 +452,7 @@ class MainActivity : Activity() {
         bottomNavigation = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(7), dp(5), dp(7), dp(5))
+            setPadding(dp(5), dp(4), dp(5), dp(4))
             background = roundedBackground(cSurface, 22)
         }
         bottomNavigation.addView(createNavItem(DEST_HOME, "Home", R.drawable.ic_home) { showHome() },
@@ -382,10 +464,20 @@ class MainActivity : Activity() {
         bottomNavigation.addView(createNavItem(DEST_SOUND, "Sound", R.drawable.ic_tune) { showDsp() },
             LinearLayout.LayoutParams(0, dp(58), 1f))
         root.addView(bottomNavigation, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            marginStart = dp(13); marginEnd = dp(13)
+            marginStart = dp(13); marginEnd = dp(13); topMargin = dp(5)
         })
 
         setContentView(root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val safe = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom + dp(7))
+            WindowInsetsCompat.CONSUMED
+        }
+        ViewCompat.requestApplyInsets(root)
+        window.statusBarColor = cBackground
+        window.navigationBarColor = cBackground
         dspPage = buildDspPage()
         showHome()
     }
@@ -431,6 +523,7 @@ class MainActivity : Activity() {
             }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(39)).apply { topMargin = dp(10) }
         })
+        featuredRow.addView(featureText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         featuredCard.addView(featuredRow)
         content.addView(featuredCard, matchWrap())
 
@@ -878,7 +971,10 @@ class MainActivity : Activity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentSearch = s?.toString().orEmpty()
-                renderLibraryItems(libraryCountLabel)
+                pendingSearchRender?.let(uiHandler::removeCallbacks)
+                val render = Runnable { renderLibraryItems(libraryCountLabel) }
+                pendingSearchRender = render
+                uiHandler.postDelayed(render, 180L)
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -888,9 +984,35 @@ class MainActivity : Activity() {
 
     private var libraryListContainer: LinearLayout? = null
 
+    private fun appendLibraryPage(container: LinearLayout) {
+        val start = libraryRenderedCount
+        val end = (start + LIBRARY_PAGE_SIZE).coerceAtMost(libraryPageTracks.size)
+        if (start >= end) return
+
+        for (index in start until end) {
+            addTrackRow(container, libraryPageTracks[index], libraryPageTracks, index)
+        }
+        libraryRenderedCount = end
+
+        if (end < libraryPageTracks.size) {
+            val remaining = libraryPageTracks.size - end
+            val nextCount = minOf(LIBRARY_PAGE_SIZE, remaining)
+            val more = materialAction("Load next $nextCount songs  ·  $remaining remaining", false, true)
+            more.setOnClickListener {
+                container.removeView(more)
+                appendLibraryPage(container)
+            }
+            container.addView(more, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(44)
+            ).apply { topMargin = dp(12); bottomMargin = dp(12) })
+        }
+    }
+
     private fun renderLibraryItems(countLabel: TextView? = null) {
         val container = libraryListContainer ?: return
         container.removeAllViews()
+        libraryRenderedCount = 0
+        libraryPageTracks = emptyList()
         val query = currentSearch.trim().lowercase()
         fun matches(track: MusicTrack): Boolean = query.isBlank() ||
             track.title.lowercase().contains(query) || track.artist.lowercase().contains(query) || track.album.lowercase().contains(query)
@@ -912,6 +1034,7 @@ class MainActivity : Activity() {
             else -> tracks.sortedWith(compareBy<MusicTrack> { it.title.lowercase() })
         }
         displayedTracks = tracks
+        libraryPageTracks = tracks
         countLabel?.text = when (currentLibraryTab) {
             LIBRARY_PLAYLISTS -> if (currentPlaylist == null) "${playlistStore.playlists().size + 1} playlists" else "${tracks.size} tracks"
             LIBRARY_ALBUMS -> "${libraryTracks.map { it.album to it.artist }.distinct().size} albums"
@@ -962,7 +1085,7 @@ class MainActivity : Activity() {
                     setPadding(dp(22), dp(44), dp(22), dp(44))
                 })
             } else {
-                tracks.forEachIndexed { index, track -> addTrackRow(container, track, tracks, index) }
+                appendLibraryPage(container)
             }
         }
     }
@@ -1236,15 +1359,7 @@ class MainActivity : Activity() {
         val track = entry?.let { e -> libraryTracks.firstOrNull { it.uri == e.uri } } ?: currentNowPlaying
         miniTitle.text = entry?.title ?: track?.title ?: "Nothing playing"
         miniSubtitle.text = entry?.artist ?: track?.artist ?: "Choose a track from your library"
-        if (track?.albumArtUri != null) {
-            miniArtwork.imageTintList = null
-            miniArtwork.setPadding(0, 0, 0, 0)
-            runCatching { miniArtwork.setImageURI(track.albumArtUri) }
-        } else {
-            miniArtwork.setImageResource(R.drawable.ic_music_note)
-            miniArtwork.imageTintList = ColorStateList.valueOf(cAccent)
-            miniArtwork.setPadding(dp(12), dp(12), dp(12), dp(12))
-        }
+        bindArtwork(miniArtwork, track?.albumArtUri, 48)
         miniPlayerCard.visibility = if (entry != null || track != null) {
             if (activeDestination == DEST_NOW_PLAYING) View.GONE else View.VISIBLE
         } else View.GONE
@@ -1266,7 +1381,7 @@ class MainActivity : Activity() {
                 }
                 updateMiniPlayer()
             }
-            uiHandler.postDelayed(this, 500L)
+            if (activityStarted) uiHandler.postDelayed(this, 500L)
         }
     }
 
@@ -1519,8 +1634,23 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        activityStarted = true
+        uiHandler.removeCallbacks(progressTicker)
+        uiHandler.post(progressTicker)
+    }
+
+    override fun onStop() {
+        activityStarted = false
+        uiHandler.removeCallbacks(progressTicker)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         uiHandler.removeCallbacks(progressTicker)
+        pendingSearchRender?.let(uiHandler::removeCallbacks)
+        artworkExecutor.shutdownNow()
         if (bound) unbindService(connection)
         bound = false
         playback = null
@@ -1558,6 +1688,8 @@ class MainActivity : Activity() {
         private const val SORT_ALBUM = "Album"
         private const val SORT_RECENT = "Recently added"
         private const val MAX_EQ_BANDS = 64
+        private const val LIBRARY_PAGE_SIZE = 48
+        private const val NO_ARTWORK_TAG = "auralis:no-artwork"
         private val FILTER_LABELS = arrayOf(
             "Low-pass (0)", "High-pass (1)", "Band-pass (2)",
             "Peaking (3)", "Low shelf (4)", "High shelf (5)"
