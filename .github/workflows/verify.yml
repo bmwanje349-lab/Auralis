@@ -67,7 +67,7 @@ jobs:
           APK=auralis/app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           sha256sum "$APK" | tee auralis/AURALIS-SHA256SUMS.txt
-          cat > auralis/AURALIS-BUILD-INFO.txt <<'INFO'
+          cat > auralis/AURALIS-BUILD-INFO.txt <<INFO
           Auralis standard music player feature build
           Source: ${GITHUB_SHA}
           Application ID: com.auralis
