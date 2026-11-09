@@ -30,6 +30,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.BaseAdapter
+import android.widget.AbsListView
+import android.widget.ListView
 import android.widget.CompoundButton
 import android.widget.CheckBox
 import android.widget.EditText
@@ -61,6 +64,9 @@ class MainActivity : Activity() {
     private var pendingUri: Uri? = null
     private var pendingQueue: Pair<List<MusicTrack>, Int>? = null
     private lateinit var contentFrame: FrameLayout
+    private val destinationPages = mutableMapOf<String, View>()
+    private val libraryPages = mutableMapOf<String, LibraryPageState>()
+    private var nowPlayingPage: View? = null
     private lateinit var miniPlayerCard: MaterialCardView
     private lateinit var miniArtwork: ImageView
     private lateinit var miniTitle: TextView
@@ -79,6 +85,7 @@ class MainActivity : Activity() {
     @Volatile private var librarySnapshot: List<MusicTrack> = emptyList()
     @Volatile private var libraryTrackByUri: Map<Uri, MusicTrack> = emptyMap()
     @Volatile private var libraryIndexById: Map<Long, Int> = emptyMap()
+    @Volatile private var librarySearchIndex: Map<Long, String> = emptyMap()
     private var displayedTracks: List<MusicTrack> = emptyList()
     private var currentLibraryTab = LIBRARY_SONGS
     private var currentSearch = ""
@@ -1023,6 +1030,99 @@ class MainActivity : Activity() {
     }
 
     private var libraryListContainer: LinearLayout? = null
+    private var libraryCollectionScroll: ScrollView? = null
+    private var libraryListView: ListView? = null
+    private var libraryTrackAdapter: TrackListAdapter? = null
+
+    private data class LibraryPageState(
+        val page: View,
+        val searchField: EditText,
+        val countLabel: TextView,
+        val collectionContainer: LinearLayout,
+        val collectionScroll: ScrollView,
+        val trackList: ListView
+    )
+
+    private inner class TrackListAdapter : BaseAdapter() {
+        private var tracks: List<MusicTrack> = emptyList()
+
+        fun submit(items: List<MusicTrack>) {
+            tracks = items
+            notifyDataSetChanged()
+        }
+
+        override fun getCount(): Int = tracks.size
+        override fun getItem(position: Int): MusicTrack = tracks[position]
+        override fun getItemId(position: Int): Long = tracks[position].id
+        override fun hasStableIds(): Boolean = true
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val row: LinearLayout
+            val holder: TrackRowHolder
+            if (convertView == null) {
+                row = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(3), dp(6), dp(3), dp(6))
+                }
+                val art = artworkThumbnail(null, 52, 11)
+                row.addView(art, LinearLayout.LayoutParams(dp(52), dp(52)).apply { marginEnd = dp(11) })
+                val info = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+                val title = uiText("", 13f, cText, true).apply { maxLines = 1 }
+                val artist = uiText("", 10.5f, cMuted).apply { maxLines = 1; setPadding(0, dp(4), 0, 0) }
+                info.addView(title)
+                info.addView(artist)
+                row.addView(info, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                val duration = uiText("", 10f, cMuted).apply { setPadding(dp(4), 0, dp(2), 0) }
+                row.addView(duration)
+                val more = ImageView(this@MainActivity).apply {
+                    setImageResource(R.drawable.ic_more)
+                    imageTintList = ColorStateList.valueOf(cMuted)
+                    scaleType = ImageView.ScaleType.CENTER_INSIDE
+                    contentDescription = "More track actions"
+                    isClickable = true
+                    isFocusable = true
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                }
+                row.addView(more, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(4) })
+                holder = TrackRowHolder(art, title, artist, duration, more)
+                row.tag = holder
+            } else {
+                row = convertView as LinearLayout
+                holder = row.tag as TrackRowHolder
+            }
+
+            val track = tracks[position]
+            holder.track = track
+            holder.title.text = track.title
+            holder.artist.text = track.artist
+            holder.duration.text = track.durationLabel
+            bindArtwork(holder.artwork, track.albumArtUri, 52)
+            holder.more.setOnClickListener { holder.track?.let { showTrackActions(it) } }
+            row.setOnClickListener {
+                val item = holder.track ?: return@setOnClickListener
+                val index = tracks.indexOfFirst { it.id == item.id }
+                if (index >= 0) playTracks(tracks, index)
+            }
+            row.setOnLongClickListener {
+                holder.track?.let { showTrackActions(it) }
+                true
+            }
+            row.layoutParams = AbsListView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            return row
+        }
+    }
+
+    private data class TrackRowHolder(
+        val artwork: ImageView,
+        val title: TextView,
+        val artist: TextView,
+        val duration: TextView,
+        val more: ImageView,
+        var track: MusicTrack? = null
+    )
 
     private fun appendLibraryPage(container: LinearLayout) {
         val start = libraryRenderedCount
