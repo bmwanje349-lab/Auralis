@@ -544,7 +544,7 @@ class MainActivity : Activity() {
         val page = buildLibraryView(searchMode)
         return LibraryPageState(
             page,
-            librarySearchField ?: error("Library search field was not built"),
+            librarySearchField,
             libraryCountLabel ?: error("Library count label was not built"),
             libraryListContainer ?: error("Library collection container was not built"),
             libraryCollectionScroll ?: error("Library collection scroll was not built"),
@@ -1268,30 +1268,36 @@ class MainActivity : Activity() {
         }
         page.addView(heading, matchWrap().apply { bottomMargin = dp(22) })
 
-        val searchWrap = roundedCard(cSurface, 20).apply { strokeColor = cBorder; strokeWidth = dp(1) }
-        val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
-        val searchIcon = ImageView(this).apply { setImageResource(R.drawable.ic_search); imageTintList = ColorStateList.valueOf(cMuted) }
-        searchRow.addView(searchIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(10) })
-        val search = EditText(this).apply {
-            hint = "Search your music"
-            setSingleLine(true)
-            textSize = 15.5f
-            setTextColor(cText)
-            setHintTextColor(cMuted)
-            background = null
-            setPadding(0, dp(12), 0, dp(12))
-            setText(currentSearch)
-            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+        // Search is a dedicated destination. The Library remains focused on browsing.
+        if (searchMode) {
+            val searchWrap = roundedCard(cSurface, 20).apply { strokeColor = cBorder; strokeWidth = dp(1) }
+            val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
+            val searchIcon = ImageView(this).apply { setImageResource(R.drawable.ic_search); imageTintList = ColorStateList.valueOf(cMuted) }
+            searchRow.addView(searchIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(10) })
+            val search = EditText(this).apply {
+                hint = "Search your music"
+                setSingleLine(true)
+                textSize = 15.5f
+                setTextColor(cText)
+                setHintTextColor(cMuted)
+                background = null
+                setPadding(0, dp(12), 0, dp(12))
+                setText(currentSearch)
+                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            }
+            searchRow.addView(search, LinearLayout.LayoutParams(0, dp(56), 1f))
+            if (currentSearch.isNotBlank()) {
+                searchRow.addView(iconControl(R.drawable.ic_back, "Clear search", 30, Color.TRANSPARENT, cMuted) {
+                    search.setText("")
+                }, LinearLayout.LayoutParams(dp(30), dp(30)))
+            }
+            searchWrap.addView(searchRow)
+            page.addView(searchWrap, matchWrap().apply { bottomMargin = dp(18) })
+            librarySearchField = search
+    
+        } else {
+            librarySearchField = null
         }
-        searchRow.addView(search, LinearLayout.LayoutParams(0, dp(56), 1f))
-        if (currentSearch.isNotBlank()) {
-            searchRow.addView(iconControl(R.drawable.ic_back, "Clear search", 30, Color.TRANSPARENT, cMuted) {
-                search.setText("")
-            }, LinearLayout.LayoutParams(dp(30), dp(30)))
-        }
-        searchWrap.addView(searchRow)
-        page.addView(searchWrap, matchWrap().apply { bottomMargin = dp(18) })
-        librarySearchField = search
 
         val categories = ChipGroup(this).apply {
             isSingleSelection = true
@@ -1433,7 +1439,7 @@ class MainActivity : Activity() {
 
     private data class LibraryPageState(
         val page: View,
-        val searchField: EditText,
+        val searchField: EditText?,
         val countLabel: TextView,
         val collectionContainer: LinearLayout,
         val collectionScroll: ScrollView,
@@ -1596,7 +1602,7 @@ class MainActivity : Activity() {
         libraryCollectionItems = emptyList()
         libraryCollectionRenderedCount = 0
 
-        val query = currentSearch.trim()
+        val query = if (searchMode) currentSearch.trim() else ""
         val queryKey = query.lowercase()
         val tab = currentLibraryTab
         val sort = currentSort
