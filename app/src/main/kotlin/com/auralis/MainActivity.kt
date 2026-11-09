@@ -53,6 +53,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 class MainActivity : Activity() {
     private var playback: PlaybackService? = null
@@ -115,6 +116,13 @@ class MainActivity : Activity() {
     private lateinit var nowDurationLabel: TextView
     private val eqControls = mutableListOf<EqUiControl>()
     private val artworkExecutor: ExecutorService = Executors.newFixedThreadPool(2)
+    private val libraryQueryExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "Auralis-library-query").apply { isDaemon = true }
+    }
+    private var pendingLibraryQuery: Future<*>? = null
+    private var libraryQueryGeneration = 0
+    private var homeAlbumTracks: List<MusicTrack> = emptyList()
+    private var homeRecentTracks: List<MusicTrack> = emptyList()
     private val artworkCache = object : LruCache<String, Bitmap>(12 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
     }
@@ -529,9 +537,7 @@ class MainActivity : Activity() {
         featuredCard.addView(featuredRow)
         content.addView(featuredCard, matchWrap())
 
-        val albumGroups = libraryTracks.groupBy { it.album to it.artist }.values
-            .mapNotNull { it.firstOrNull() }
-            .sortedByDescending { it.dateAddedSeconds }
+        val albumGroups = homeAlbumTracks
         if (albumGroups.isNotEmpty()) {
             sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary() })
             val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -562,7 +568,7 @@ class MainActivity : Activity() {
             empty.addView(emptyContent)
             content.addView(empty, matchWrap())
         } else {
-            val latest = libraryTracks.sortedByDescending { it.dateAddedSeconds }.take(6)
+            val latest = homeRecentTracks.take(6)
             latest.forEachIndexed { index, track -> addTrackRow(content, track, latest, index) }
         }
 
@@ -810,9 +816,15 @@ class MainActivity : Activity() {
                 runOnUiThread { Toast.makeText(this, "Could not scan audio: ${it.message ?: "unknown error"}", Toast.LENGTH_LONG).show() }
                 emptyList()
             }
+            val recent = loaded.sortedByDescending { it.dateAddedSeconds }
+            val albums = loaded.groupBy { it.album to it.artist }.values
+                .mapNotNull { group -> group.maxByOrNull { it.dateAddedSeconds } }
+                .sortedByDescending { it.dateAddedSeconds }
             runOnUiThread {
                 libraryTracks.clear()
                 libraryTracks.addAll(loaded)
+                homeRecentTracks = recent
+                homeAlbumTracks = albums
                 if (::contentFrame.isInitialized) {
                     when (activeDestination) {
                         DEST_HOME -> showHome()
@@ -973,10 +985,11 @@ class MainActivity : Activity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentSearch = s?.toString().orEmpty()
+                pendingLibraryQuery?.cancel(true)
                 pendingSearchRender?.let(uiHandler::removeCallbacks)
                 val render = Runnable { renderLibraryItems(libraryCountLabel) }
                 pendingSearchRender = render
-                uiHandler.postDelayed(render, 180L)
+                uiHandler.postDelayed(render, 90L)
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -1015,79 +1028,186 @@ class MainActivity : Activity() {
         container.removeAllViews()
         libraryRenderedCount = 0
         libraryPageTracks = emptyList()
-        val query = currentSearch.trim().lowercase()
-        fun matches(track: MusicTrack): Boolean = query.isBlank() ||
-            track.title.lowercase().contains(query) || track.artist.lowercase().contains(query) || track.album.lowercase().contains(query)
-        var tracks = when (currentLibraryTab) {
-            LIBRARY_FAVOURITES -> libraryTracks.filter { playlistStore.isFavourite(it.id) }
-            LIBRARY_PLAYLISTS -> currentPlaylist?.let { name ->
-                val ids = playlistStore.trackIds(name).toSet()
-                libraryTracks.filter { it.id in ids }
-            } ?: emptyList()
-            else -> libraryTracks.filter { track ->
-                (currentAlbum == null || track.album == currentAlbum) &&
-                (currentArtist == null || track.artist == currentArtist)
+
+        val query = currentSearch.trim()
+        val tab = currentLibraryTab
+        val sort = currentSort
+        val album = currentAlbum
+        val artist = currentArtist
+        val playlist = currentPlaylist
+        val searchMode = isSearchPage
+        val sourceTracks = libraryTracks.toList()
+        val favourites = if (tab == LIBRARY_FAVOURITES || playlist == PlaylistStore.FAVOURITES_NAME) {
+            playlistStore.favourites()
+        } else emptySet()
+        val playlistIds = if (tab == LIBRARY_PLAYLISTS && playlist != null) {
+            playlistStore.trackIds(playlist).toHashSet()
+        } else emptySet()
+        val playlistNames = if (tab == LIBRARY_PLAYLISTS && playlist == null) {
+            playlistStore.playlists()
+        } else emptyList()
+        val generation = ++libraryQueryGeneration
+
+        // Do not populate Search with dozens of rows before the user has typed.
+        if (searchMode && query.isBlank()) {
+            countLabel?.text = "Search your music"
+            val prompt = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(22), dp(34), dp(22), dp(34))
             }
-        }.filter(::matches)
-        tracks = when (currentSort) {
-            SORT_ARTIST -> tracks.sortedWith(compareBy<MusicTrack> { it.artist.lowercase() }.thenBy { it.title.lowercase() })
-            SORT_ALBUM -> tracks.sortedWith(compareBy<MusicTrack> { it.album.lowercase() }.thenBy { it.title.lowercase() })
-            SORT_RECENT -> tracks.sortedByDescending { it.dateAddedSeconds }
-            else -> tracks.sortedWith(compareBy<MusicTrack> { it.title.lowercase() })
-        }
-        displayedTracks = tracks
-        libraryPageTracks = tracks
-        countLabel?.text = when (currentLibraryTab) {
-            LIBRARY_PLAYLISTS -> if (currentPlaylist == null) "${playlistStore.playlists().size + 1} playlists" else "${tracks.size} tracks"
-            LIBRARY_ALBUMS -> "${libraryTracks.map { it.album to it.artist }.distinct().size} albums"
-            LIBRARY_ARTISTS -> "${libraryTracks.map { it.artist }.distinct().size} artists"
-            else -> "${tracks.size} songs"
+            val icon = ImageView(this).apply {
+                setImageResource(R.drawable.ic_search)
+                imageTintList = ColorStateList.valueOf(cAccent)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+            }
+            prompt.addView(icon, LinearLayout.LayoutParams(dp(46), dp(46)))
+            prompt.addView(uiText("Find something you love", 16f, cText, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(12), 0, dp(6))
+            })
+            prompt.addView(uiText("Search by song, album or artist. Results appear as you type.", 12f, cMuted).apply {
+                gravity = Gravity.CENTER
+            })
+            container.addView(prompt, matchWrap())
+            displayedTracks = emptyList()
+            return
         }
 
-        if (currentLibraryTab == LIBRARY_ALBUMS && currentAlbum == null) {
-            val groups = libraryTracks.groupBy { it.album to it.artist }.entries.sortedBy { it.key.first.lowercase() }
-                .filter { query.isBlank() || it.key.first.lowercase().contains(query) || it.key.second.lowercase().contains(query) }
-            groups.forEach { entry ->
-                val representative = entry.value.first()
-                addLibraryCollectionRow(container, entry.key.first, entry.key.second, "${entry.value.size} tracks", representative) {
-                    currentAlbum = entry.key.first
-                    showLibrary()
+        pendingLibraryQuery?.cancel(true)
+        pendingLibraryQuery = libraryQueryExecutor.submit {
+            fun interrupted() = Thread.currentThread().isInterrupted
+            fun matches(value: String): Boolean = query.isBlank() || value.contains(query, ignoreCase = true)
+
+            val collections = when {
+                tab == LIBRARY_ALBUMS && album == null -> sourceTracks
+                    .groupBy { it.album to it.artist }
+                    .mapNotNull { (key, tracks) ->
+                        if (interrupted() || (!matches(key.first) && !matches(key.second))) null
+                        else LibraryCollectionEntry(
+                            key.first, key.second, "${tracks.size} tracks",
+                            tracks.maxByOrNull { it.dateAddedSeconds }
+                        )
+                    }
+                    .sortedBy { it.title.lowercase() }
+
+                tab == LIBRARY_ARTISTS && artist == null -> sourceTracks
+                    .groupBy { it.artist }
+                    .mapNotNull { (name, tracks) ->
+                        if (interrupted() || !matches(name)) null
+                        else LibraryCollectionEntry(
+                            name, "Artist", "${tracks.size} tracks",
+                            tracks.maxByOrNull { it.dateAddedSeconds }
+                        )
+                    }
+                    .sortedBy { it.title.lowercase() }
+
+                tab == LIBRARY_PLAYLISTS && playlist == null -> buildList {
+                    add(LibraryCollectionEntry(
+                        PlaylistStore.FAVOURITES_NAME, "Your saved tracks",
+                        "${favourites.size} tracks", sourceTracks.firstOrNull { it.id in favourites }
+                    ))
+                    playlistNames.forEach { name ->
+                        if (interrupted()) return@buildList
+                        val ids = playlistStore.trackIds(name).toHashSet()
+                        add(LibraryCollectionEntry(
+                            name, "Playlist", "${ids.size} tracks",
+                            sourceTracks.firstOrNull { it.id in ids }
+                        ))
+                    }
                 }
+
+                else -> emptyList()
             }
-        } else if (currentLibraryTab == LIBRARY_ARTISTS && currentArtist == null) {
-            libraryTracks.groupBy { it.artist }.entries.sortedBy { it.key.lowercase() }
-                .filter { query.isBlank() || it.key.lowercase().contains(query) }
-                .forEach { entry -> addLibraryCollectionRow(container, entry.key, "Artist", "${entry.value.size} tracks", entry.value.first()) {
-                    currentArtist = entry.key
-                    showLibrary()
-                } }
-        } else if (currentLibraryTab == LIBRARY_PLAYLISTS && currentPlaylist == null) {
-            addLibraryCollectionRow(container, PlaylistStore.FAVOURITES_NAME, "Your saved tracks", "${playlistStore.favourites().size} tracks", libraryTracks.firstOrNull { playlistStore.isFavourite(it.id) }) {
-                currentPlaylist = PlaylistStore.FAVOURITES_NAME
-                showLibrary()
-            }
-            playlistStore.playlists().forEach { name ->
-                addLibraryCollectionRow(container, name, "Playlist", "${playlistStore.trackIds(name).size} tracks", libraryTracks.firstOrNull { it.id in playlistStore.trackIds(name) }) {
-                    currentPlaylist = name
-                    showLibrary()
-                }
-            }
-            container.addView(Button(this).apply {
-                text = "+ Create playlist"
-                styleButton(this)
-                setOnClickListener { showCreatePlaylistDialog() }
-            }, matchWrap().apply { topMargin = dp(10) })
-        } else {
-            if (tracks.isEmpty()) {
-                container.addView(TextView(this).apply {
-                    text = if (libraryTracks.isEmpty()) "No music found yet. Add audio to your device or use OPEN FILE." else "No matching tracks. Try another search or category."
-                    textSize = 14f
-                    setTextColor(Color.rgb(157, 176, 188))
-                    gravity = Gravity.CENTER
-                    setPadding(dp(22), dp(44), dp(22), dp(44))
-                })
+
+            if (interrupted()) return@submit
+
+            val filtered = if (collections.isNotEmpty() || tab == LIBRARY_PLAYLISTS && playlist == null ||
+                tab == LIBRARY_ALBUMS && album == null || tab == LIBRARY_ARTISTS && artist == null) {
+                emptyList()
             } else {
-                appendLibraryPage(container)
+                val selectedIds = when (tab) {
+                    LIBRARY_FAVOURITES -> favourites
+                    LIBRARY_PLAYLISTS -> playlistIds
+                    else -> null
+                }
+                val result = ArrayList<MusicTrack>()
+                for (track in sourceTracks) {
+                    if (interrupted()) return@submit
+                    if (selectedIds != null && track.id !in selectedIds) continue
+                    if (album != null && track.album != album) continue
+                    if (artist != null && track.artist != artist) continue
+                    if (query.isNotBlank() &&
+                        !matches(track.title) && !matches(track.artist) && !matches(track.album)) continue
+                    result.add(track)
+                }
+                when (sort) {
+                    SORT_ARTIST -> result.sortWith(compareBy<MusicTrack> { it.artist.lowercase() }.thenBy { it.title.lowercase() })
+                    SORT_ALBUM -> result.sortWith(compareBy<MusicTrack> { it.album.lowercase() }.thenBy { it.title.lowercase() })
+                    SORT_RECENT -> result.sortByDescending { it.dateAddedSeconds }
+                    // MediaStore already provides title order, so the default path needs no sort.
+                }
+                result
+            }
+
+            if (interrupted()) return@submit
+
+            runOnUiThread {
+                if (generation != libraryQueryGeneration || isFinishing || isDestroyed ||
+                    libraryListContainer !== container) return@runOnUiThread
+
+                displayedTracks = filtered
+                libraryPageTracks = filtered
+
+                countLabel?.text = when {
+                    collections.isNotEmpty() -> "${collections.size} ${if (tab == LIBRARY_ARTISTS) "artists" else if (tab == LIBRARY_PLAYLISTS) "playlists" else "albums"}"
+                    tab == LIBRARY_ALBUMS && album == null -> "${sourceTracks.map { it.album to it.artist }.distinct().size} albums"
+                    tab == LIBRARY_ARTISTS && artist == null -> "${sourceTracks.map { it.artist }.distinct().size} artists"
+                    tab == LIBRARY_PLAYLISTS && playlist != null -> "${filtered.size} tracks"
+                    else -> "${filtered.size} songs"
+                }
+
+                when {
+                    tab == LIBRARY_ALBUMS && album == null ||
+                        tab == LIBRARY_ARTISTS && artist == null ||
+                        tab == LIBRARY_PLAYLISTS && playlist == null -> {
+                        if (collections.isEmpty()) {
+                            container.addView(uiText("No matching collections found.", 13f, cMuted).apply {
+                                gravity = Gravity.CENTER
+                                setPadding(dp(20), dp(34), dp(20), dp(34))
+                            }, matchWrap())
+                        } else {
+                            collections.forEach { item ->
+                                addLibraryCollectionRow(container, item.title, item.subtitle, item.trailing, item.track) {
+                                    when (tab) {
+                                        LIBRARY_ALBUMS -> { currentAlbum = item.title; currentArtist = null }
+                                        LIBRARY_ARTISTS -> { currentArtist = item.title; currentAlbum = null }
+                                        LIBRARY_PLAYLISTS -> currentPlaylist = item.title
+                                    }
+                                    showLibrary()
+                                }
+                            }
+                            if (tab == LIBRARY_PLAYLISTS) {
+                                container.addView(materialAction("+ Create playlist", false, true).apply {
+                                    setOnClickListener { showCreatePlaylistDialog() }
+                                }, matchWrap().apply { topMargin = dp(10) })
+                            }
+                        }
+                    }
+
+                    filtered.isEmpty() -> {
+                        container.addView(uiText(
+                            if (sourceTracks.isEmpty()) "No music found yet. Add audio to your device or use OPEN FILE."
+                            else "No matching tracks. Try another search or category.",
+                            13f, cMuted
+                        ).apply {
+                            gravity = Gravity.CENTER
+                            setPadding(dp(22), dp(40), dp(22), dp(40))
+                        }, matchWrap())
+                    }
+
+                    else -> appendLibraryPage(container)
+                }
             }
         }
     }
@@ -1652,6 +1772,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         uiHandler.removeCallbacks(progressTicker)
         pendingSearchRender?.let(uiHandler::removeCallbacks)
+        pendingLibraryQuery?.cancel(true)
+        libraryQueryExecutor.shutdownNow()
         artworkExecutor.shutdownNow()
         if (bound) unbindService(connection)
         bound = false
@@ -1668,6 +1790,13 @@ class MainActivity : Activity() {
         val enabled: CompoundButton,
         val gain: Slider,
         val value: TextView
+    )
+
+    private data class LibraryCollectionEntry(
+        val title: String,
+        val subtitle: String,
+        val trailing: String,
+        val track: MusicTrack?
     )
 
     companion object {
@@ -1690,7 +1819,7 @@ class MainActivity : Activity() {
         private const val SORT_ALBUM = "Album"
         private const val SORT_RECENT = "Recently added"
         private const val MAX_EQ_BANDS = 64
-        private const val LIBRARY_PAGE_SIZE = 48
+        private const val LIBRARY_PAGE_SIZE = 18
         private const val NO_ARTWORK_TAG = "auralis:no-artwork"
         private val FILTER_LABELS = arrayOf(
             "Low-pass (0)", "High-pass (1)", "Band-pass (2)",
