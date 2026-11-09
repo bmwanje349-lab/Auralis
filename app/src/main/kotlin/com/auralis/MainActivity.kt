@@ -245,10 +245,11 @@ class MainActivity : Activity() {
         return card
     }
 
-    private fun setPlaceholderArtwork(image: ImageView) {
+    private fun setPlaceholderArtwork(image: ImageView, targetSizeDp: Int) {
         image.setImageResource(R.drawable.ic_music_note)
         image.imageTintList = ColorStateList.valueOf(Color.rgb(170, 229, 213))
-        image.setPadding(dp(22), dp(22), dp(22), dp(22))
+        val inset = dp(if (targetSizeDp <= 64) 11 else 22)
+        image.setPadding(inset, inset, inset, inset)
         image.scaleType = ImageView.ScaleType.CENTER_INSIDE
     }
 
@@ -260,7 +261,7 @@ class MainActivity : Activity() {
         if (uri == null) {
             if (image.tag != NO_ARTWORK_TAG) {
                 image.tag = NO_ARTWORK_TAG
-                setPlaceholderArtwork(image)
+                setPlaceholderArtwork(image, targetSizeDp)
             }
             return
         }
@@ -277,7 +278,7 @@ class MainActivity : Activity() {
             return
         }
 
-        setPlaceholderArtwork(image)
+        setPlaceholderArtwork(image, targetSizeDp)
         val targetPx = dp(targetSizeDp).coerceAtLeast(64)
         artworkExecutor.execute {
             val bitmap = runCatching {
@@ -297,7 +298,7 @@ class MainActivity : Activity() {
                             image.setPadding(0, 0, 0, 0)
                             image.setImageBitmap(bitmap)
                         } else {
-                            setPlaceholderArtwork(image)
+                            setPlaceholderArtwork(image, targetSizeDp)
                         }
                     }
                 }
