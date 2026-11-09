@@ -59,3 +59,29 @@ jobs:
         run: |
           java -version
           /tmp/gradle-8.7/bin/gradle --no-daemon -p auralis assembleDebug testDebugUnitTest
+
+      - name: Verify APK and record build identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=auralis/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          sha256sum "$APK" | tee auralis/AURALIS-SHA256SUMS.txt
+          cat > auralis/AURALIS-BUILD-INFO.txt <<'INFO'
+          Auralis standard music player feature build
+          Source: ${GITHUB_SHA}
+          Application ID: com.auralis
+          Variant: debug
+          Build task: assembleDebug
+          Test task: testDebugUnitTest
+          INFO
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: auralis-standard-player-debug-${{ github.sha }}
+          path: |
+            auralis/app/build/outputs/apk/debug/app-debug.apk
+            auralis/AURALIS-BUILD-INFO.txt
+            auralis/AURALIS-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
