@@ -51,6 +51,10 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null
           set -o pipefail
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Verify Auralis version metadata
+        run: |
+          grep -q "versionCode 5" auralis/app/build.gradle
+          grep -q "versionName '1.2.2'" auralis/app/build.gradle
       - name: Install Gradle distribution
         run: |
           curl --retry 3 --retry-delay 2 -fsSL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
