@@ -5,7 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -20,6 +23,9 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.os.Binder
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.os.Build
 import android.os.IBinder
 import android.os.Process
@@ -69,6 +75,37 @@ class PlaybackService : Service() {
     private val reverbParameters = doubleArrayOf(0.55, 0.50, 0.45, 0.15, 1.00, 0.50, 0.50)
     private val eqSettings = ConcurrentHashMap<Int, EqSetting>()
 
+    // Pause when headphones are unplugged or the Bluetooth route drops, instead of
+    // blasting the track out of the phone speaker.
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY && isPlaying()) pausePlayback()
+        }
+    }
+    private var noisyReceiverRegistered = false
+
+    private val sleepHandler = Handler(Looper.getMainLooper())
+    @Volatile private var sleepDeadlineMs = 0L
+    private val sleepRunnable = Runnable {
+        sleepDeadlineMs = 0L
+        pausePlayback()
+    }
+
+    /** Pauses playback after [minutes]; 0 cancels the timer. */
+    fun setSleepTimer(minutes: Int) {
+        sleepHandler.removeCallbacks(sleepRunnable)
+        if (minutes <= 0) {
+            sleepDeadlineMs = 0L
+            return
+        }
+        val delayMs = minutes * 60_000L
+        sleepDeadlineMs = SystemClock.elapsedRealtime() + delayMs
+        sleepHandler.postDelayed(sleepRunnable, delayMs)
+    }
+
+    fun sleepTimerRemainingMs(): Long =
+        if (sleepDeadlineMs == 0L) 0L else (sleepDeadlineMs - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(AudioManager::class.java)
@@ -76,6 +113,10 @@ class PlaybackService : Service() {
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Auralis:Playback")
         createNotificationChannel()
         createMediaSession()
+        val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(noisyReceiver, noisyFilter, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(noisyReceiver, noisyFilter)
+        noisyReceiverRegistered = true
         startForeground(NOTIFICATION_ID, buildNotification("Auralis is ready"))
     }
 
@@ -807,6 +848,11 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        sleepHandler.removeCallbacks(sleepRunnable)
+        if (noisyReceiverRegistered) {
+            runCatching { unregisterReceiver(noisyReceiver) }
+            noisyReceiverRegistered = false
+        }
         stopCurrent()
         mediaSession?.isActive = false
         mediaSession?.release()

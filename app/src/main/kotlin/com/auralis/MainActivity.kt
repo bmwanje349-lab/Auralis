@@ -1970,7 +1970,10 @@ class MainActivity : Activity() {
 
         val infoRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val songInfo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        songInfo.addView(uiText(if (entry != null || track != null) "NOW PLAYING" else "READY TO PLAY", 9f, cAccent, true).apply { letterSpacing = 0.13f })
+        val kicker = (entry?.album ?: track?.album)?.takeIf { it.isNotBlank() && !it.equals("Unknown album", true) }?.uppercase()
+        songInfo.addView(uiText(kicker ?: if (entry != null || track != null) "NOW PLAYING" else "READY TO PLAY", 9f, cAccent, true).apply {
+            letterSpacing = 0.13f; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+        })
         songInfo.addView(uiText(entry?.title ?: track?.title ?: "Choose your music", 25f, cText, true).apply {
             maxLines = 2; setPadding(0, dp(7), 0, dp(4))
         })
@@ -2054,11 +2057,28 @@ class MainActivity : Activity() {
             setOnClickListener { showDsp() }
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(8) })
         content.addView(actions, matchWrap().apply { topMargin = dp(30) })
+        val sleepRemaining = playback?.sleepTimerRemainingMs() ?: 0L
+        content.addView(materialAction(
+            if (sleepRemaining > 0L) "Sleep timer  ·  ${(sleepRemaining + 59_999L) / 60_000L} min left" else "Sleep timer", false, true
+        ).apply { setOnClickListener { showSleepTimerDialog() } },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(12) })
 
         scroll.addView(content)
         page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         contentFrame.addView(page, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         updateMiniPlayer()
+    }
+
+    private fun showSleepTimerDialog() {
+        val service = playback ?: return
+        val options = listOf("Off" to 0, "15 minutes" to 15, "30 minutes" to 30, "45 minutes" to 45, "60 minutes" to 60, "90 minutes" to 90)
+        AlertDialog.Builder(this).setTitle("Sleep timer")
+            .setItems(options.map { it.first }.toTypedArray()) { _, which ->
+                val (label, minutes) = options[which]
+                service.setSleepTimer(minutes)
+                Toast.makeText(this, if (minutes == 0) "Sleep timer off" else "Music will pause in $label", Toast.LENGTH_SHORT).show()
+                showNowPlaying()
+            }.show()
     }
 
     private fun showQueueDialog() {
