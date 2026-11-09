@@ -2135,20 +2135,31 @@ class MainActivity : Activity() {
         channel: Int = 0,
         initialGainDb: Double = 0.0
     ) {
-        val card = roundedCard(cSurfaceRaised, 16)
+        val card = roundedCard(cSurfaceSoft, 18).apply {
+            strokeColor = cBorder
+            strokeWidth = dp(1)
+        }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(9), dp(12), dp(10))
+            setPadding(dp(16), dp(15), dp(16), dp(15))
         }
-        val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val heading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val toggle = MaterialSwitch(this).apply {
             text = title
-            textSize = 11f
+            textSize = 14f
             setTextColor(cText)
+            showText = false
         }
-        heading.addView(toggle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        heading.addView(toggle, LinearLayout.LayoutParams(0, dp(48), 1f))
         box.addView(heading)
-        val gainLabel = uiText("Gain: 0.0 dB", 10f, cMuted).apply { setPadding(0, dp(5), 0, 0) }
+
+        val gainLabel = uiText(
+            "Gain · \${"%.1f".format(initialGainDb)} dB",
+            12f, cMuted
+        ).apply { setPadding(0, dp(9), 0, dp(2)) }
         val gain = Slider(this).apply {
             valueFrom = 0f
             valueTo = 300f
@@ -2157,21 +2168,23 @@ class MainActivity : Activity() {
         }
         val control = EqUiControl(index, type, frequency, q, channel, toggle, gain, gainLabel)
         eqControls.add(control)
+
         fun update() {
             val db = (gain.value.toInt() - 150) / 10.0
-            gainLabel.text = "Gain: ${"%.1f".format(db)} dB"
+            gainLabel.text = "Gain · \${"%.1f".format(db)} dB"
             playback?.setEqBand(index, toggle.isChecked, type, frequency, q, db, channel)
         }
+
         toggle.setOnCheckedChangeListener { _, _ -> update() }
         gain.addOnChangeListener { _, _, _ -> update() }
         box.addView(gainLabel)
         box.addView(gain, matchWrap())
         card.addView(box)
-        parent.addView(card, matchWrap().apply { topMargin = dp(7) })
+        parent.addView(card, matchWrap().apply { bottomMargin = dp(11) })
         updateEqCount()
     }
 
-    private fun showAddEqBandDialog() {
+        private fun showAddEqBandDialog() {
         if (eqControls.size >= MAX_EQ_BANDS) {
             Toast.makeText(this, "The recovered model supports 64 bands.", Toast.LENGTH_SHORT).show()
             return
@@ -2251,7 +2264,10 @@ class MainActivity : Activity() {
     }
 
     private fun updateEqCount() {
-        if (::eqCount.isInitialized) eqCount.text = "${eqControls.size} / $MAX_EQ_BANDS bands"
+        if (::eqCount.isInitialized) {
+            eqCount.text = if (eqControls.size == 1) "1 band available"
+            else "${eqControls.size} bands available"
+        }
     }
 
     private fun addSection(parent: LinearLayout, title: String, subtitle: String) {
