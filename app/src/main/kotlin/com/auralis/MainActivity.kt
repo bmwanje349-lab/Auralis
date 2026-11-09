@@ -1603,6 +1603,7 @@ class MainActivity : Activity() {
         libraryCollectionItems = emptyList()
         libraryCollectionRenderedCount = 0
 
+        val searchMode = isSearchPage
         val query = if (searchMode) currentSearch.trim() else ""
         val queryKey = query.lowercase()
         val tab = currentLibraryTab
@@ -1610,7 +1611,6 @@ class MainActivity : Activity() {
         val album = currentAlbum
         val artist = currentArtist
         val playlist = currentPlaylist
-        val searchMode = isSearchPage
         val sourceTracks = librarySnapshot
         val generation = ++libraryQueryGeneration
 
