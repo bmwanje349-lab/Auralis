@@ -683,37 +683,122 @@ class MainActivity : Activity() {
         librarySearchField?.requestFocus()
     }
 
-    private fun dspCard(parent: LinearLayout, title: String, subtitle: String, contentBuilder: (LinearLayout) -> Unit): LinearLayout {
-        val card = roundedCard(cSurface, 22)
+    private fun dspCard(
+        parent: LinearLayout,
+        title: String,
+        subtitle: String,
+        initiallyExpanded: Boolean = false,
+        contentBuilder: (LinearLayout) -> Unit
+    ): LinearLayout {
+        val card = roundedCard(cSurface, 24).apply {
+            strokeColor = cBorder
+            strokeWidth = dp(1)
+            cardElevation = 0f
+        }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            setPadding(dp(18), dp(17), dp(16), dp(17))
+        }
+
+        val iconTile = FrameLayout(this).apply {
+            background = roundedBackground(cAccentDeep, 15)
+        }
+        val icon = ImageView(this).apply {
+            setImageResource(when (title) {
+                "Output level" -> R.drawable.ic_tune
+                "StereoWide", "Stereo placement" -> R.drawable.ic_equalizer
+                "Equalizer" -> R.drawable.ic_library
+                "ReplayGain" -> R.drawable.ic_album
+                "Reverb" -> R.drawable.ic_headphones
+                "Dynamics" -> R.drawable.ic_music_note
+                else -> R.drawable.ic_tune
+            })
+            imageTintList = ColorStateList.valueOf(cAccent)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(11), dp(11), dp(11), dp(11))
+        }
+        iconTile.addView(icon, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        header.addView(iconTile, LinearLayout.LayoutParams(dp(46), dp(46)).apply {
+            marginEnd = dp(14)
+        })
+
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(uiText(title, 16f, cText, true))
+        copy.addView(uiText(subtitle, 12f, cMuted).apply {
+            maxLines = 2
+            setPadding(0, dp(5), 0, 0)
+        })
+        header.addView(copy, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ))
+
+        var expanded = initiallyExpanded
+        val affordance = uiText(if (expanded) "−" else "+", 22f, cAccent, true).apply {
+            gravity = Gravity.CENTER
+        }
+        header.addView(affordance, LinearLayout.LayoutParams(dp(32), dp(36)))
+
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(15), dp(16), dp(15))
+            visibility = if (expanded) View.VISIBLE else View.GONE
+            setPadding(dp(18), 0, dp(18), dp(19))
         }
-        body.addView(uiText(title, 16f, cText, true))
-        body.addView(uiText(subtitle, 10.5f, cMuted).apply { setPadding(0, dp(5), 0, dp(12)) })
-        val divider = View(this).apply { setBackgroundColor(cBorder) }
-        body.addView(divider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply { bottomMargin = dp(9) })
+        addDspDivider(body)
         contentBuilder(body)
-        card.addView(body)
-        parent.addView(card, matchWrap().apply { bottomMargin = dp(12) })
+
+        column.addView(header)
+        column.addView(body)
+        card.addView(column)
+
+        header.setOnClickListener {
+            expanded = !expanded
+            body.visibility = if (expanded) View.VISIBLE else View.GONE
+            affordance.text = if (expanded) "−" else "+"
+        }
+
+        parent.addView(card, matchWrap().apply { bottomMargin = dp(15) })
         return body
     }
 
-    private fun dspSwitch(parent: LinearLayout, title: String, detail: String, onChange: (Boolean) -> Unit): MaterialSwitch {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(5), 0, dp(5)) }
+        private fun dspSwitch(
+        parent: LinearLayout,
+        title: String,
+        detail: String,
+        onChange: (Boolean) -> Unit
+    ): MaterialSwitch {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(68)
+            setPadding(0, dp(9), 0, dp(9))
+        }
         val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        copy.addView(uiText(title, 13f, cText, true))
-        copy.addView(uiText(detail, 10f, cMuted).apply { setPadding(0, dp(3), 0, 0) })
-        row.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        copy.addView(uiText(title, 15f, cText, true))
+        copy.addView(uiText(detail, 12f, cMuted).apply {
+            setPadding(0, dp(5), 0, 0)
+            maxLines = 2
+        })
+        row.addView(copy, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+        ))
         val toggle = MaterialSwitch(this).apply {
+            showText = false
             setOnCheckedChangeListener { _, checked -> onChange(checked) }
         }
-        row.addView(toggle)
-        parent.addView(row, matchWrap().apply { bottomMargin = dp(4) })
+        row.addView(toggle, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
+        ).apply { marginStart = dp(12) })
+        parent.addView(row, matchWrap())
         return toggle
     }
 
-    private fun dspSlider(
+        private fun dspSlider(
         parent: LinearLayout,
         title: String,
         initial: Float,
@@ -722,299 +807,35 @@ class MainActivity : Activity() {
         format: (Float) -> String,
         onChange: (Float) -> Unit
     ): Pair<Slider, TextView> {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        row.addView(uiText(title, 12f, cMuted, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val value = uiText(format(initial), 11f, cAccent, true)
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(uiText(title, 12f, cMuted, true).apply {
+            letterSpacing = 0.05f
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val value = uiText(format(initial), 13f, cAccent, true)
         row.addView(value)
-        parent.addView(row, matchWrap().apply { topMargin = dp(7) })
+        parent.addView(row, matchWrap().apply { topMargin = dp(13) })
+
         val slider = Slider(this).apply {
             valueFrom = 0f
             valueTo = max
             stepSize = step
             this.value = initial.coerceIn(valueFrom, valueTo)
-            addOnChangeListener { _, next, fromUser ->
+            addOnChangeListener { _, next, _ ->
                 value.text = format(next)
                 onChange(next)
             }
         }
-        parent.addView(slider, matchWrap().apply { topMargin = dp(1); bottomMargin = dp(6) })
+        parent.addView(slider, matchWrap().apply {
+            topMargin = dp(5)
+            bottomMargin = dp(11)
+        })
         return slider to value
     }
 
-    private fun buildDspPage(): View {
-        val page = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBackground)
-        }
-        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(23), dp(24), dp(38))
-        }
-
-        content.addView(uiText("SOUND STUDIO", 11f, cAccent, true).apply {
-            letterSpacing = 0.18f
-        })
-        content.addView(uiText("Make it sound right.", 29f, cText, true).apply {
-            setPadding(0, dp(7), 0, dp(7))
-        })
-        content.addView(uiText(
-            "The essentials are here. Open a section when you want more control.",
-            13f, cMuted
-        ).apply {
-            setPadding(0, 0, 0, dp(23))
-            maxLines = 2
-        })
-
-        content.addView(uiText("EVERYDAY CONTROLS", 10f, cAccent, true).apply {
-            letterSpacing = 0.13f
-            setPadding(dp(2), 0, 0, dp(11))
-        })
-
-        dspCard(content, "Output level", "Set the overall level of your music.", initiallyExpanded = true) { body ->
-            val saved = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
-                .getInt(KEY_MASTER_PREAMP, 150).coerceIn(0, 300)
-            val (slider, _) = dspSlider(
-                body, "MASTER PREAMP", saved.toFloat(), 300f, 1f,
-                { replayDbText(it.toInt()) }
-            ) { _ -> applyReplayGain() }
-            replayPreampSlider = slider
-
-            val reset = MaterialButton(this).apply {
-                text = "Reset to 0 dB"
-                isAllCaps = false
-                textSize = 12f
-                cornerRadius = dp(14)
-                insetTop = 0
-                insetBottom = 0
-                minHeight = dp(42)
-                backgroundTintList = ColorStateList.valueOf(cSurfaceSoft)
-                setTextColor(cText)
-                setOnClickListener {
-                    replayPreampSlider.value = 150f
-                    applyReplayGain()
-                }
-            }
-            body.addView(reset, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)
-            ).apply { topMargin = dp(5) })
-        }
-
-        dspCard(
-            content,
-            "StereoWide",
-            "Give your music a wider, more spacious stereo image.",
-            initiallyExpanded = true
-        ) { body ->
-            stereoToggle = dspSwitch(
-                body,
-                "Enable StereoWide",
-                "Keep it off for the original stereo presentation."
-            ) { checked ->
-                playback?.setStereoWide(checked, stereoSlider.value.toInt())
-            }
-
-            val (width, _) = dspSlider(
-                body, "WIDTH", 0f, 100f, 1f,
-                { value -> "\${value.toInt()}%" }
-            ) { value ->
-                val gain = 1.0 + 2.0 * value / 100.0
-                stereoValue.text = if (value <= 0f) {
-                    "Natural stereo width"
-                } else {
-                    "Wider image · side gain \${"%.2f".format(gain)}×"
-                }
-                playback?.setStereoWide(stereoToggle.isChecked, value.toInt())
-            }
-            stereoSlider = width
-            stereoValue = uiText("Natural stereo width", 12f, cMuted).apply {
-                setPadding(0, dp(1), 0, dp(4))
-            }
-            body.addView(stereoValue, matchWrap())
-            body.addView(uiText(
-                "A little width goes a long way. Adjust while music is playing.",
-                12f, cMuted
-            ).apply { setPadding(0, dp(10), 0, 0) }, matchWrap())
-        }
-
-        content.addView(uiText("MORE SOUND OPTIONS", 10f, cAccent, true).apply {
-            letterSpacing = 0.13f
-            setPadding(dp(2), dp(12), 0, dp(11))
-        })
-
-        dspCard(content, "Stereo placement", "Balance left and right, or listen in mono.") { body ->
-            balanceToggle = dspSwitch(
-                body, "Balance", "Move the sound towards the left or right."
-            ) { checked ->
-                playback?.setBalance(checked, (balanceSlider.value - 100f) / 100.0)
-            }
-            val (balance, _) = dspSlider(
-                body, "LEFT  ·  CENTRE  ·  RIGHT", 100f, 200f, 1f,
-                { value ->
-                    when {
-                        value < 100f -> "Left \${(100f - value).toInt()}%"
-                        value > 100f -> "Right \${(value - 100f).toInt()}%"
-                        else -> "Centre"
-                    }
-                }
-            ) { value ->
-                val normalized = (value - 100f) / 100.0
-                val db = 48.0 * kotlin.math.abs(normalized)
-                balanceValue.text = when {
-                    normalized >= 1.0 -> "Right channel only"
-                    normalized <= -1.0 -> "Left channel only"
-                    normalized > 0.0 -> "Right bias · left −\${"%.1f".format(db)} dB"
-                    normalized < 0.0 -> "Left bias · right −\${"%.1f".format(db)} dB"
-                    else -> "Centred · both channels equal"
-                }
-                playback?.setBalance(balanceToggle.isChecked, normalized)
-            }
-            balanceSlider = balance
-            balanceValue = uiText("Centred · both channels equal", 12f, cMuted)
-            body.addView(balanceValue, matchWrap().apply { topMargin = dp(2) })
-
-            addDspDivider(body)
-            monoToggle = dspSwitch(
-                body, "Mono audio", "Combine left and right channels into one."
-            ) { checked ->
-                playback?.setMono(checked)
-            }
-        }
-
-        dspCard(content, "Equalizer", "Shape the tone with bass and treble controls.") { body ->
-            val eqHeader = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            eqCount = uiText("2 bands available", 12f, cMuted)
-            eqHeader.addView(eqCount, LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-            ))
-            eqHeader.addView(materialAction("Add band", true, true).apply {
-                setOnClickListener { showAddEqBandDialog() }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)))
-            body.addView(eqHeader, matchWrap().apply { bottomMargin = dp(12) })
-
-            eqContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            body.addView(eqContainer, matchWrap())
-            addEqBand(eqContainer, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
-            addEqBand(eqContainer, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
-            updateEqCount()
-        }
-
-        dspCard(content, "ReplayGain", "Keep the volume more consistent between tracks.") { body ->
-            replayModeButton = materialAction(replayModeText(), false, true).apply {
-                textSize = 13f
-                setOnClickListener {
-                    replayMode = (replayMode + 1) % 3
-                    text = replayModeText()
-                    applyReplayGain()
-                }
-            }
-            body.addView(uiText("GAIN MODE", 10f, cMuted, true), matchWrap())
-            body.addView(replayModeButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { topMargin = dp(7); bottomMargin = dp(15) })
-
-            replaySourceButton = materialAction(replaySourceText(), false, true).apply {
-                textSize = 13f
-                setOnClickListener {
-                    replaySource = 1 - replaySource
-                    text = replaySourceText()
-                    applyReplayGain()
-                }
-            }
-            body.addView(uiText("PREFERRED TAG SOURCE", 10f, cMuted, true), matchWrap())
-            body.addView(replaySourceButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { topMargin = dp(7); bottomMargin = dp(13) })
-
-            val (default, _) = dspSlider(
-                body, "DEFAULT GAIN WITHOUT TAGS", 150f, 300f, 1f,
-                { replayDbText(it.toInt()) }
-            ) { _ -> applyReplayGain() }
-            replayDefaultSlider = default
-        }
-
-        dspCard(content, "Reverb", "Add a sense of space and room to your music.") { body ->
-            reverbToggle = dspSwitch(
-                body, "Enable reverb", "Apply the room and ambience effect."
-            ) { enabled ->
-                playback?.setReverbEnabled(enabled)
-            }
-
-            addDspSubheading(body, "BASIC ROOM CONTROLS")
-            fun addReverbControl(index: Int, title: String) {
-                val (slider, valueLabel) = dspSlider(
-                    body, title, reverbInitial[index].toFloat(), 100f, 1f,
-                    { value ->
-                        when (index) {
-                            1 -> "\${value.toInt()}% · \${100 + 185 * value.toInt()} Hz"
-                            3 -> "\${value.toInt()}% · \${value.toInt() * 2} ms"
-                            6 -> "\${value.toInt()}% · \${18600 - 185 * value.toInt()} Hz"
-                            else -> "\${value.toInt()}%"
-                        }
-                    }
-                ) { value ->
-                    playback?.setReverbParameter(index, value / 100.0)
-                }
-                reverbSliders[index] = slider
-                reverbValueLabels[index] = valueLabel
-            }
-
-            addReverbControl(0, "Room size")
-            addReverbControl(1, "Tone")
-            addReverbControl(4, "Wet mix")
-
-            dspDisclosure(
-                body,
-                "Advanced room controls",
-                "Fade, pre-delay and damping"
-            ) { advanced ->
-                addReverbControl(2, "Fade")
-                addReverbControl(3, "Pre-delay")
-                addReverbControl(5, "Pre-delay mix")
-                addReverbControl(6, "Damping")
-            }
-        }
-
-        dspCard(content, "Dynamics", "Keep peaks controlled and playback clean.") { body ->
-            limiterToggle = dspSwitch(
-                body, "Peak limiter", "Help prevent sudden peaks from clipping."
-            ) { enabled ->
-                playback?.setLimiter(enabled, limiterPath)
-            }
-            addDspDivider(body)
-            limiterPathButton = materialAction("Path: Hard ceiling (1.0)", false, true).apply {
-                textSize = 13f
-                setOnClickListener {
-                    limiterPath = if (limiterPath == 0) 1 else 0
-                    text = if (limiterPath == 0) "Path: Hard ceiling (1.0)"
-                    else "Path: Pre-gain protection"
-                    playback?.setLimiter(limiterToggle.isChecked, limiterPath)
-                }
-            }
-            body.addView(limiterPathButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { topMargin = dp(8) })
-        }
-
-        content.addView(uiText(
-            "Your adjustments are applied live while music is playing.",
-            12f, cMuted
-        ).apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(10), dp(14), dp(10), dp(6))
-        })
-
-        scroll.addView(content)
-        page.addView(scroll, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ))
-        return page
-    }
-
-    private fun addDspDivider(parent: LinearLayout) {
+        private fun addDspDivider(parent: LinearLayout) {
         parent.addView(View(this).apply { setBackgroundColor(cBorder) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)).apply {
                 topMargin = dp(10)
