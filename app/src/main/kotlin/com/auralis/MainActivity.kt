@@ -538,7 +538,7 @@ class MainActivity : Activity() {
         page.addView(heading)
         val search = EditText(this).apply {
             hint = "Search songs, artists, albums"
-            singleLine = true
+            setSingleLine(true)
             textSize = 14f
             setTextColor(Color.WHITE)
             setHintTextColor(Color.rgb(137, 157, 169))
@@ -602,7 +602,7 @@ class MainActivity : Activity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentSearch = s?.toString().orEmpty()
-                renderLibraryItems(count)
+                renderLibraryItems()
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -630,10 +630,10 @@ class MainActivity : Activity() {
             }
         }.filter(::matches)
         tracks = when (currentSort) {
-            SORT_ARTIST -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.artist }.thenBy { it.title })
-            SORT_ALBUM -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.album }.thenBy { it.title })
+            SORT_ARTIST -> tracks.sortedWith(compareBy<MusicTrack> { it.artist.lowercase() }.thenBy { it.title.lowercase() })
+            SORT_ALBUM -> tracks.sortedWith(compareBy<MusicTrack> { it.album.lowercase() }.thenBy { it.title.lowercase() })
             SORT_RECENT -> tracks.sortedByDescending { it.dateAddedSeconds }
-            else -> tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            else -> tracks.sortedWith(compareBy<MusicTrack> { it.title.lowercase() })
         }
         displayedTracks = tracks
         countLabel?.text = when (currentLibraryTab) {
@@ -762,7 +762,7 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle(track.title).setItems(actions) { _, which ->
             when (which) {
                 0 -> {
-                    val list = displayedTracks.ifEmpty { libraryTracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title }) }
+                    val list = displayedTracks.ifEmpty { libraryTracks.sortedWith(compareBy<MusicTrack> { it.title.lowercase() }) }
                     playTracks(list, list.indexOfFirst { it.id == track.id }.takeIf { it >= 0 } ?: 0)
                 }
                 1 -> { playback?.addToQueue(track, true); Toast.makeText(this, "Queued to play next", Toast.LENGTH_SHORT).show() }

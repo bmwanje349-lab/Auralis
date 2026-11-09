@@ -101,7 +101,7 @@ class PlaybackService : Service() {
         startQueueEntry(0, 0L)
     }
 
-    fun playQueue(tracks: List<MusicTrack>, startIndex: Int = 0) {
+    internal fun playQueue(tracks: List<MusicTrack>, startIndex: Int = 0) {
         if (tracks.isEmpty()) return
         synchronized(queueLock) {
             queue.clear()
@@ -111,7 +111,7 @@ class PlaybackService : Service() {
         startQueueEntry(queueIndex, 0L)
     }
 
-    fun addToQueue(track: MusicTrack, playNext: Boolean = false) {
+    internal fun addToQueue(track: MusicTrack, playNext: Boolean = false) {
         val shouldStart = synchronized(queueLock) {
             val wasEmpty = queue.isEmpty()
             val item = QueueEntry(track.uri, track.title, track.artist, track.album, track.durationMs)
@@ -187,8 +187,8 @@ class PlaybackService : Service() {
     fun getRepeatMode(): Int = repeatMode
     fun queueSize(): Int = synchronized(queueLock) { queue.size }
     fun currentQueueIndex(): Int = queueIndex
-    fun currentEntry(): QueueEntry? = synchronized(queueLock) { queue.getOrNull(queueIndex) }
-    fun queueSnapshot(): List<QueueEntry> = synchronized(queueLock) { queue.toList() }
+    internal fun currentEntry(): QueueEntry? = synchronized(queueLock) { queue.getOrNull(queueIndex) }
+    internal fun queueSnapshot(): List<QueueEntry> = synchronized(queueLock) { queue.toList() }
     fun skipToQueueIndex(index: Int) {
         val autoPlay = isPlaying()
         val valid = synchronized(queueLock) { index in queue.indices }
