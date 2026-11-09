@@ -655,7 +655,7 @@ class MainActivity : Activity() {
                         else -> "${value.toInt()}%"
                     } }) { value ->
                     val intValue = value.toInt()
-                    reverbValueLabels[index].text = when (index) {
+                    label.text = when (index) {
                         1 -> "Filter: $intValue% · cutoff ${100 + 185 * intValue} Hz"
                         2 -> "Fade: $intValue%"
                         3 -> "Pre-delay: $intValue% · ${intValue * 2} ms"
@@ -1308,23 +1308,23 @@ class MainActivity : Activity() {
         }
         heading.addView(toggle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         box.addView(heading)
-        val value = uiText("Gain: 0.0 dB", 10f, cMuted).apply { setPadding(0, dp(5), 0, 0) }
+        val gainLabel = uiText("Gain: 0.0 dB", 10f, cMuted).apply { setPadding(0, dp(5), 0, 0) }
         val gain = Slider(this).apply {
             valueFrom = 0f
             valueTo = 300f
             stepSize = 1f
-            value = ((initialGainDb.coerceIn(-15.0, 15.0) * 10.0) + 150.0).toFloat()
+            this.value = ((initialGainDb.coerceIn(-15.0, 15.0) * 10.0) + 150.0).toFloat()
         }
-        val control = EqUiControl(index, type, frequency, q, channel, toggle, gain, value)
+        val control = EqUiControl(index, type, frequency, q, channel, toggle, gain, gainLabel)
         eqControls.add(control)
         fun update() {
             val db = (gain.value.toInt() - 150) / 10.0
-            value.text = "Gain: ${"%.1f".format(db)} dB"
+            gainLabel.text = "Gain: ${"%.1f".format(db)} dB"
             playback?.setEqBand(index, toggle.isChecked, type, frequency, q, db, channel)
         }
         toggle.setOnCheckedChangeListener { _, _ -> update() }
         gain.addOnChangeListener { _, _, _ -> update() }
-        box.addView(value)
+        box.addView(gainLabel)
         box.addView(gain, matchWrap())
         card.addView(box)
         parent.addView(card, matchWrap().apply { topMargin = dp(7) })
