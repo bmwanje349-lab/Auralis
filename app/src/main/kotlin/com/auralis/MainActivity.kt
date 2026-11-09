@@ -1269,6 +1269,7 @@ class MainActivity : Activity() {
         page.addView(heading, matchWrap().apply { bottomMargin = dp(22) })
 
         // Search is a dedicated destination. The Library remains focused on browsing.
+        var searchInput: EditText? = null
         if (searchMode) {
             val searchWrap = roundedCard(cSurface, 20).apply { strokeColor = cBorder; strokeWidth = dp(1) }
             val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), 0, dp(16), 0) }
@@ -1293,8 +1294,8 @@ class MainActivity : Activity() {
             }
             searchWrap.addView(searchRow)
             page.addView(searchWrap, matchWrap().apply { bottomMargin = dp(18) })
+            searchInput = search
             librarySearchField = search
-    
         } else {
             librarySearchField = null
         }
@@ -1416,7 +1417,7 @@ class MainActivity : Activity() {
         page.addView(results, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
         ))
-        search.addTextChangedListener(object : TextWatcher {
+        searchInput?.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 currentSearch = s?.toString().orEmpty()
