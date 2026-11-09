@@ -76,6 +76,8 @@ class MainActivity : Activity() {
     private var librarySearchField: EditText? = null
     private var isSearchPage = false
     private val libraryTracks = mutableListOf<MusicTrack>()
+    @Volatile private var librarySnapshot: List<MusicTrack> = emptyList()
+    @Volatile private var libraryTrackByUri: Map<Uri, MusicTrack> = emptyMap()
     private var displayedTracks: List<MusicTrack> = emptyList()
     private var currentLibraryTab = LIBRARY_SONGS
     private var currentSearch = ""
@@ -514,7 +516,7 @@ class MainActivity : Activity() {
         content.addView(uiText("A personal space for the music you love.", 13f, cMuted).apply { setPadding(0, 0, 0, dp(17)) })
 
         val current = playback?.currentEntry()
-        val activeTrack = current?.let { entry -> libraryTracks.firstOrNull { it.uri == entry.uri } } ?: currentNowPlaying
+        val activeTrack = current?.let { entry -> libraryTrackByUri[entry.uri] } ?: currentNowPlaying
         val featured = activeTrack ?: libraryTracks.firstOrNull()
         val featuredCard = roundedCard(Color.rgb(20, 43, 46), 24)
         val featuredRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(13), dp(13), dp(13), dp(13)) }
@@ -816,6 +818,7 @@ class MainActivity : Activity() {
                 runOnUiThread { Toast.makeText(this, "Could not scan audio: ${it.message ?: "unknown error"}", Toast.LENGTH_LONG).show() }
                 emptyList()
             }
+            val byUri = loaded.associateBy { it.uri }
             val recent = loaded.sortedByDescending { it.dateAddedSeconds }
             val albums = loaded.groupBy { it.album to it.artist }.values
                 .mapNotNull { group -> group.maxByOrNull { it.dateAddedSeconds } }
@@ -823,6 +826,8 @@ class MainActivity : Activity() {
             runOnUiThread {
                 libraryTracks.clear()
                 libraryTracks.addAll(loaded)
+                librarySnapshot = loaded
+                libraryTrackByUri = byUri
                 homeRecentTracks = recent
                 homeAlbumTracks = albums
                 if (::contentFrame.isInitialized) {
@@ -1036,7 +1041,7 @@ class MainActivity : Activity() {
         val artist = currentArtist
         val playlist = currentPlaylist
         val searchMode = isSearchPage
-        val sourceTracks = libraryTracks.toList()
+        val sourceTracks = librarySnapshot
         val favourites = if (tab == LIBRARY_FAVOURITES || playlist == PlaylistStore.FAVOURITES_NAME) {
             playlistStore.favourites()
         } else emptySet()
@@ -1050,6 +1055,7 @@ class MainActivity : Activity() {
 
         // Do not populate Search with dozens of rows before the user has typed.
         if (searchMode && query.isBlank()) {
+            pendingLibraryQuery?.cancel(true)
             countLabel?.text = "Search your music"
             val prompt = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1161,8 +1167,8 @@ class MainActivity : Activity() {
 
                 countLabel?.text = when {
                     collections.isNotEmpty() -> "${collections.size} ${if (tab == LIBRARY_ARTISTS) "artists" else if (tab == LIBRARY_PLAYLISTS) "playlists" else "albums"}"
-                    tab == LIBRARY_ALBUMS && album == null -> "${sourceTracks.map { it.album to it.artist }.distinct().size} albums"
-                    tab == LIBRARY_ARTISTS && artist == null -> "${sourceTracks.map { it.artist }.distinct().size} artists"
+                    tab == LIBRARY_ALBUMS && album == null -> "${collections.size} albums"
+                    tab == LIBRARY_ARTISTS && artist == null -> "${collections.size} artists"
                     tab == LIBRARY_PLAYLISTS && playlist != null -> "${filtered.size} tracks"
                     else -> "${filtered.size} songs"
                 }
@@ -1242,7 +1248,6 @@ class MainActivity : Activity() {
     }
 
     private fun addTrackRow(parent: LinearLayout, track: MusicTrack, queueTracks: List<MusicTrack>, index: Int) {
-        displayedTracks = queueTracks
         val row = roundedCard(cSurface, 17).apply {
             isClickable = true
             isFocusable = true
@@ -1284,8 +1289,10 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle(track.title).setItems(actions) { _, which ->
             when (which) {
                 0 -> {
-                    val list = displayedTracks.ifEmpty { libraryTracks.sortedWith(compareBy<MusicTrack> { it.title.lowercase() }) }
-                    playTracks(list, list.indexOfFirst { it.id == track.id }.takeIf { it >= 0 } ?: 0)
+                    val list = displayedTracks.takeIf { candidates -> candidates.any { it.id == track.id } }
+                        ?: librarySnapshot
+                    val index = list.indexOfFirst { it.id == track.id }
+                    if (index >= 0) playTracks(list, index) else playTracks(listOf(track), 0)
                 }
                 1 -> { playback?.addToQueue(track, true); Toast.makeText(this, "Queued to play next", Toast.LENGTH_SHORT).show() }
                 2 -> { playback?.addToQueue(track, false); Toast.makeText(this, "Added to queue", Toast.LENGTH_SHORT).show() }
@@ -1324,7 +1331,7 @@ class MainActivity : Activity() {
         contentFrame.removeAllViews()
 
         val entry = playback?.currentEntry()
-        val track = entry?.let { active -> libraryTracks.firstOrNull { it.uri == active.uri } } ?: currentNowPlaying
+        val track = entry?.let { active -> libraryTrackByUri[active.uri] } ?: currentNowPlaying
         val page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackground(GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
@@ -1462,7 +1469,7 @@ class MainActivity : Activity() {
             (if (index == current) "▶  " else "    ") + entry.title + " — " + entry.artist
         }
         AlertDialog.Builder(this).setTitle("Playback queue").setItems(labels.toTypedArray()) { _, which ->
-            currentNowPlaying = libraryTracks.firstOrNull { it.uri == entries[which].uri } ?: currentNowPlaying
+            currentNowPlaying = libraryTrackByUri[entries[which].uri] ?: currentNowPlaying
             playback?.skipToQueueIndex(which)
             showNowPlaying()
         }.setNeutralButton("Clear queue") { _, _ -> playback?.clearQueue(); currentNowPlaying = null; updateMiniPlayer() }.show()
@@ -1478,15 +1485,24 @@ class MainActivity : Activity() {
     private fun updateMiniPlayer() {
         if (!::miniTitle.isInitialized || !::miniPlayerCard.isInitialized) return
         val entry = playback?.currentEntry()
-        val track = entry?.let { e -> libraryTracks.firstOrNull { it.uri == e.uri } } ?: currentNowPlaying
-        miniTitle.text = entry?.title ?: track?.title ?: "Nothing playing"
-        miniSubtitle.text = entry?.artist ?: track?.artist ?: "Choose a track from your library"
+        val track = entry?.let { current -> libraryTrackByUri[current.uri] } ?: currentNowPlaying
+        val title = entry?.title ?: track?.title ?: "Nothing playing"
+        val subtitle = entry?.artist ?: track?.artist ?: "Choose a track from your library"
+        if (miniTitle.text != title) miniTitle.text = title
+        if (miniSubtitle.text != subtitle) miniSubtitle.text = subtitle
         bindArtwork(miniArtwork, track?.albumArtUri, 48)
-        miniPlayerCard.visibility = if (entry != null || track != null) {
+
+        val targetVisibility = if (entry != null || track != null) {
             if (activeDestination == DEST_NOW_PLAYING) View.GONE else View.VISIBLE
         } else View.GONE
+        if (miniPlayerCard.visibility != targetVisibility) miniPlayerCard.visibility = targetVisibility
+
         if (::miniPlayButton.isInitialized) {
-            miniPlayButton.setIconResource(if (playback?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play)
+            val targetIcon = if (playback?.isPlaying() == true) R.drawable.ic_pause else R.drawable.ic_play
+            if (miniPlayButton.tag != targetIcon) {
+                miniPlayButton.setIconResource(targetIcon)
+                miniPlayButton.tag = targetIcon
+            }
         }
     }
 
