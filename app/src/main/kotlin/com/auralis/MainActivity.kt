@@ -78,6 +78,7 @@ class MainActivity : Activity() {
     private val libraryTracks = mutableListOf<MusicTrack>()
     @Volatile private var librarySnapshot: List<MusicTrack> = emptyList()
     @Volatile private var libraryTrackByUri: Map<Uri, MusicTrack> = emptyMap()
+    @Volatile private var libraryIndexById: Map<Long, Int> = emptyMap()
     private var displayedTracks: List<MusicTrack> = emptyList()
     private var currentLibraryTab = LIBRARY_SONGS
     private var currentSearch = ""
@@ -542,7 +543,10 @@ class MainActivity : Activity() {
             setOnClickListener {
                 when {
                     activeTrack != null && playback?.currentEntry() != null -> showNowPlaying()
-                    featured != null -> playTracks(libraryTracks, libraryTracks.indexOfFirst { it.id == featured.id }.coerceAtLeast(0))
+                    featured != null -> {
+                        val index = libraryIndexById[featured.id]
+                        if (index != null) playTracks(librarySnapshot, index) else playTracks(listOf(featured), 0)
+                    }
                     else -> requestLibraryPermissionOrLoad()
                 }
             }
@@ -832,6 +836,7 @@ class MainActivity : Activity() {
                 emptyList()
             }
             val byUri = loaded.associateBy { it.uri }
+            val indexById = loaded.withIndex().associate { it.value.id to it.index }
             val recent = loaded.sortedByDescending { it.dateAddedSeconds }
             val albums = loaded.groupBy { it.album to it.artist }.values
                 .mapNotNull { group -> group.maxByOrNull { it.dateAddedSeconds } }
@@ -841,6 +846,7 @@ class MainActivity : Activity() {
                 libraryTracks.addAll(loaded)
                 librarySnapshot = loaded
                 libraryTrackByUri = byUri
+                libraryIndexById = indexById
                 homeRecentTracks = recent
                 homeAlbumTracks = albums
                 if (::contentFrame.isInitialized) {
@@ -1060,7 +1066,7 @@ class MainActivity : Activity() {
         }
         libraryCollectionRenderedCount = end
 
-        if (tab == LIBRARY_PLAYLISTS) {
+        if (tab == LIBRARY_PLAYLISTS && start == 0) {
             val create = materialAction("+ Create playlist", false, true).apply {
                 setOnClickListener { showCreatePlaylistDialog() }
             }
@@ -1350,10 +1356,14 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this).setTitle(track.title).setItems(actions) { _, which ->
             when (which) {
                 0 -> {
-                    val list = displayedTracks.takeIf { candidates -> candidates.any { it.id == track.id } }
-                        ?: librarySnapshot
-                    val index = list.indexOfFirst { it.id == track.id }
-                    if (index >= 0) playTracks(list, index) else playTracks(listOf(track), 0)
+                    val visibleIndex = displayedTracks.indexOfFirst { it.id == track.id }
+                    if (visibleIndex >= 0) {
+                        playTracks(displayedTracks, visibleIndex)
+                    } else {
+                        val libraryIndex = libraryIndexById[track.id]
+                        if (libraryIndex != null) playTracks(librarySnapshot, libraryIndex)
+                        else playTracks(listOf(track), 0)
+                    }
                 }
                 1 -> { playback?.addToQueue(track, true); Toast.makeText(this, "Queued to play next", Toast.LENGTH_SHORT).show() }
                 2 -> { playback?.addToQueue(track, false); Toast.makeText(this, "Added to queue", Toast.LENGTH_SHORT).show() }
