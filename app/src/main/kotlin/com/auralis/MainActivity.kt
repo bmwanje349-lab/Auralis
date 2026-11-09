@@ -647,25 +647,15 @@ class MainActivity : Activity() {
             reverbToggle = dspSwitch(body, "Enable reverb", "Apply the native reverb processor", { enabled -> playback?.setReverbEnabled(enabled) })
             val names = arrayOf("Size", "Filter", "Fade", "Pre-delay", "Mix", "Pre-delay mix", "Damp")
             for (index in names.indices) {
-                val (slider, label) = dspSlider(body, names[index], reverbInitial[index].toFloat(), 100f, 1f,
+                val (slider, valueLabel) = dspSlider(body, names[index], reverbInitial[index].toFloat(), 100f, 1f,
                     { value -> when (index) {
-                        1 -> "${value.toInt()}% · ${100 + 185 * value.toInt()} Hz"
+                        1 -> "${value.toInt()}% · cutoff ${100 + 185 * value.toInt()} Hz"
                         3 -> "${value.toInt()}% · ${value.toInt() * 2} ms"
-                        6 -> "${value.toInt()}% · ${18600 - 185 * value.toInt()} Hz"
+                        6 -> "${value.toInt()}% · cutoff ${18600 - 185 * value.toInt()} Hz"
                         else -> "${value.toInt()}%"
-                    } }) { value ->
-                    val intValue = value.toInt()
-                    label.text = when (index) {
-                        1 -> "Filter: $intValue% · cutoff ${100 + 185 * intValue} Hz"
-                        2 -> "Fade: $intValue%"
-                        3 -> "Pre-delay: $intValue% · ${intValue * 2} ms"
-                        6 -> "Damp: $intValue% · cutoff ${18600 - 185 * intValue} Hz"
-                        else -> "${names[index]}: $intValue%"
-                    }
-                    playback?.setReverbParameter(index, value / 100.0)
-                }
+                    } }) { value -> playback?.setReverbParameter(index, value / 100.0) }
                 reverbSliders[index] = slider
-                reverbValueLabels[index] = label
+                reverbValueLabels[index] = valueLabel
             }
         }
 
