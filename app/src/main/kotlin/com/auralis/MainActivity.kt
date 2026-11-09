@@ -1009,9 +1009,43 @@ class MainActivity : Activity() {
         sortRow.addView(sortButton)
         page.addView(sortRow, matchWrap().apply { topMargin = dp(5); bottomMargin = dp(5) })
 
-        libraryListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(3), 0, dp(15)) }
-        val listScroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false; addView(libraryListContainer) }
-        page.addView(listScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        libraryListContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(3), 0, dp(15))
+        }
+        val listScroll = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            addView(libraryListContainer)
+        }
+        libraryCollectionScroll = listScroll
+
+        val listView = ListView(this).apply {
+            divider = GradientDrawable().apply { setColor(cBorder); setSize(1, dp(1)) }
+            dividerHeight = dp(1)
+            selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+            isFastScrollEnabled = true
+            isSmoothScrollbarEnabled = true
+            cacheColorHint = Color.TRANSPARENT
+            setBackgroundColor(cBackground)
+            setPadding(0, dp(3), 0, dp(12))
+            clipToPadding = false
+        }
+        libraryTrackAdapter = TrackListAdapter()
+        listView.adapter = libraryTrackAdapter
+        listView.visibility = View.GONE
+        libraryListView = listView
+
+        val results = FrameLayout(this)
+        results.addView(listScroll, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        results.addView(listView, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+        ))
+        page.addView(results, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+        ))
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -1021,7 +1055,7 @@ class MainActivity : Activity() {
                 pendingSearchRender?.let(uiHandler::removeCallbacks)
                 val render = Runnable { renderLibraryItems(libraryCountLabel) }
                 pendingSearchRender = render
-                uiHandler.postDelayed(render, 90L)
+                uiHandler.post(render)
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
