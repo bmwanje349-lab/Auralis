@@ -911,11 +911,10 @@ class MainActivity : Activity() {
                 body, "WIDTH", 0f, 100f, 1f,
                 { value -> "${value.toInt()}%" }
             ) { value ->
-                val gain = 1.0 + 2.0 * value / 100.0
                 stereoValue.text = if (value <= 0f) {
                     "Natural stereo width"
                 } else {
-                    "Wider image · side gain ${"%.2f".format(gain)}×"
+                    "Stereo image widened"
                 }
                 playback?.setStereoWide(stereoToggle.isChecked, value.toInt())
             }
