@@ -1,6 +1,7 @@
 package com.auralis
 
 import android.app.Notification
+import android.graphics.Bitmap
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -921,6 +922,25 @@ class PlaybackService : Service() {
         }
     }
 
+    @Volatile private var notificationArtUri: Uri? = null
+    @Volatile private var notificationArt: Bitmap? = null
+    @Volatile private var lastNotificationText: String = "Auralis is ready"
+
+    private fun loadNotificationArt(uri: Uri) {
+        notificationArtUri = uri
+        notificationArt = null
+        if (Build.VERSION.SDK_INT < 29) return
+        runCatching {
+            cleanupExecutor.execute {
+                val bitmap = runCatching { contentResolver.loadThumbnail(uri, android.util.Size(320, 320), null) }.getOrNull()
+                if (bitmap != null && notificationArtUri == uri) {
+                    notificationArt = bitmap
+                    Handler(Looper.getMainLooper()).post { updateNotification(lastNotificationText) }
+                }
+            }
+        }
+    }
+
     private fun buildNotification(text: String): Notification {
         val launch = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -929,22 +949,27 @@ class PlaybackService : Service() {
             this, requestCode, Intent(this, PlaybackService::class.java).setAction(action),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val playing = isPlaying()
+        if (entry != null && notificationArtUri != entry.uri) loadNotificationArt(entry.uri)
+        val largeArt = if (entry != null && notificationArtUri == entry.uri) notificationArt else null
         return Notification.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_auralis_mark)
+            .setColor(0xFF1B3D44.toInt())
+            .setLargeIcon(largeArt)
             .setContentTitle(entry?.title ?: "Auralis")
             .setContentText(entry?.artist?.let { "$it · $text" } ?: text)
             .setContentIntent(launch)
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(session != null)
-            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_previous, "Previous", action(ACTION_PREVIOUS, 1)).build())
-            .addAction(Notification.Action.Builder(if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+            .addAction(Notification.Action.Builder(R.drawable.ic_skip_previous, "Previous", action(ACTION_PREVIOUS, 1)).build())
+            .addAction(Notification.Action.Builder(if (playing) R.drawable.ic_pause else R.drawable.ic_play,
                 if (playing) "Pause" else "Play", action(if (playing) ACTION_PAUSE else ACTION_PLAY, 2)).build())
-            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_next, "Next", action(ACTION_NEXT, 3)).build())
+            .addAction(Notification.Action.Builder(R.drawable.ic_skip_next, "Next", action(ACTION_NEXT, 3)).build())
             .setStyle(Notification.MediaStyle().setMediaSession(mediaSession?.sessionToken).setShowActionsInCompactView(0, 1, 2))
             .build()
     }
 
     private fun updateNotification(text: String) {
+        lastNotificationText = text
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text))
     }
 

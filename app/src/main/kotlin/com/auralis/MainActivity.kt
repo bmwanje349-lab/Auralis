@@ -135,6 +135,8 @@ class MainActivity : Activity() {
     private var libraryQueryGeneration = 0
     private var homeAlbumTracks: List<MusicTrack> = emptyList()
     private var homeRecentTracks: List<MusicTrack> = emptyList()
+    private var homeStale = false
+    private var nowPlayingStateKey: String? = null
     private val artworkCache = object : LruCache<String, Bitmap>(12 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
     }
@@ -580,7 +582,8 @@ class MainActivity : Activity() {
         activeDestination = DEST_HOME
         updateNavigationState()
         updateMiniPlayer()
-        if (refreshContent) {
+        if (refreshContent || homeStale) {
+            homeStale = false
             destinationPages.remove(DEST_HOME)?.let(contentFrame::removeView)
         }
         val page = destinationPages.getOrPut(DEST_HOME) { buildHomeView() }
@@ -1252,11 +1255,29 @@ class MainActivity : Activity() {
 
     private fun requestLibraryPermissionOrLoad() {
         val permission = audioPermission()
+        val prefs = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         if (Build.VERSION.SDK_INT < 23 || checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
             refreshLibrary()
+            askNotificationPermissionOnce()
+        } else if (prefs.getBoolean(KEY_LIBRARY_PERMISSION_ASKED, false) && !shouldShowRequestPermissionRationale(permission)) {
+            Toast.makeText(this, "Turn on Music and audio access for Auralis in Settings", Toast.LENGTH_LONG).show()
+            runCatching {
+                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null)))
+            }
         } else {
+            prefs.edit().putBoolean(KEY_LIBRARY_PERMISSION_ASKED, true).apply()
             requestPermissions(arrayOf(permission), REQUEST_LIBRARY_PERMISSION)
         }
+    }
+
+    private fun askNotificationPermissionOnce() {
+        if (Build.VERSION.SDK_INT < 33) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        val prefs = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, false)) return
+        prefs.edit().putBoolean(KEY_NOTIFICATION_PERMISSION_ASKED, true).apply()
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
@@ -1264,6 +1285,7 @@ class MainActivity : Activity() {
         if (requestCode == REQUEST_LIBRARY_PERMISSION) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) refreshLibrary()
             else Toast.makeText(this, "Allow audio access to build your music library. You can still open individual files.", Toast.LENGTH_LONG).show()
+            askNotificationPermissionOnce()
         }
     }
 
@@ -1952,6 +1974,7 @@ class MainActivity : Activity() {
         if (tracks.isEmpty() || index !in tracks.indices) return
         if (activeDestination != DEST_NOW_PLAYING) returnDestination = activeDestination
         currentNowPlaying = tracks[index]
+        homeStale = true
         if (playback != null) playback?.playQueue(tracks, index) else pendingQueue = tracks to index
         if (::trackTitle.isInitialized) trackTitle.text = tracks[index].title
         if (::status.isInitialized) status.text = "Preparing decoder…"
@@ -1978,7 +2001,7 @@ class MainActivity : Activity() {
         }
         add("Play next") { playback?.addToQueue(track, true); Toast.makeText(this, "Queued to play next", Toast.LENGTH_SHORT).show() }
         add("Add to queue") { playback?.addToQueue(track, false); Toast.makeText(this, "Added to queue", Toast.LENGTH_SHORT).show() }
-        add(if (favourite) "Remove from favourites" else "Add to favourites") { playlistStore.toggleFavourite(track.id); renderLibraryItems() }
+        add(if (favourite) "Remove from favourites" else "Add to favourites") { playlistStore.toggleFavourite(track.id); homeStale = true; renderLibraryItems() }
         add("Add to playlist") { showAddToPlaylistDialog(track) }
         if (playlistName != null) {
             add("Remove from $playlistName") {
@@ -2074,6 +2097,7 @@ class MainActivity : Activity() {
             infoRow.addView(iconControl(R.drawable.ic_favorite, if (saved) "Remove from favourites" else "Add to favourites", 44,
                 if (saved) cAccentDeep else cSurfaceSoft, if (saved) cAccent else cMuted) {
                 playlistStore.toggleFavourite(track.id)
+                homeStale = true
                 showNowPlaying()
             })
         }
@@ -2183,7 +2207,15 @@ class MainActivity : Activity() {
         scroll.addView(content)
         page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         contentFrame.addView(page, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        nowPlayingStateKey = computeNowPlayingStateKey()
         updateMiniPlayer()
+    }
+
+    private fun computeNowPlayingStateKey(): String {
+        val service = playback ?: return "offline"
+        val sleepMinutes = (service.sleepTimerRemainingMs() + 59_999L) / 60_000L
+        return "${service.currentEntry()?.uri}|${service.isPlaying()}|${service.isShuffleEnabled()}|" +
+            "${service.getRepeatMode()}|${service.currentQueueIndex()}|$sleepMinutes"
     }
 
     private fun showSleepTimerDialog() {
@@ -2274,6 +2306,7 @@ class MainActivity : Activity() {
                 }, matchWrap())
             }
         }
+        dialog.setOnDismissListener { if (activeDestination == DEST_NOW_PLAYING) showNowPlaying() }
         dialog.show()
         render()
     }
@@ -2324,6 +2357,13 @@ class MainActivity : Activity() {
                     miniProgress.progress = if (duration > 0L) ((position.coerceAtMost(duration) * 1000L) / duration).toInt() else 0
                 }
                 updateMiniPlayer()
+                if (activeDestination == DEST_NOW_PLAYING && !userSeeking) {
+                    val key = computeNowPlayingStateKey()
+                    if (nowPlayingStateKey != null && nowPlayingStateKey != key) {
+                        homeStale = true
+                        showNowPlaying()
+                    }
+                }
             }
             if (activityStarted) uiHandler.postDelayed(this, 500L)
         }
@@ -2603,7 +2643,15 @@ class MainActivity : Activity() {
             DEST_NOW_PLAYING -> showNowPlaying()
             DEST_SOUND -> showDsp()
             DEST_HOME -> showHome()
-            else -> super.onBackPressed()
+            else -> when {
+                (activeDestination == DEST_LIBRARY || activeDestination == DEST_SEARCH) &&
+                    (currentAlbum != null || currentArtist != null || currentPlaylist != null) -> {
+                    currentAlbum = null; currentArtist = null; currentPlaylist = null
+                    if (activeDestination == DEST_SEARCH) showSearch(refreshContent = true) else showLibrary(refreshContent = true)
+                }
+                activeDestination != DEST_HOME -> showHome()
+                else -> super.onBackPressed()
+            }
         }
     }
 
@@ -2658,6 +2706,9 @@ class MainActivity : Activity() {
         private const val DEST_NOW_PLAYING = "now_playing"
         private const val REQUEST_AUDIO = 8201
         private const val REQUEST_LIBRARY_PERMISSION = 8202
+        private const val REQUEST_NOTIFICATIONS = 8203
+        private const val KEY_LIBRARY_PERMISSION_ASKED = "library_permission_asked"
+        private const val KEY_NOTIFICATION_PERMISSION_ASKED = "notification_permission_asked"
         private const val PREFERENCES = "auralis.player"
         private const val KEY_MASTER_PREAMP = "master_preamp_progress"
         private const val LIBRARY_SONGS = "Songs"
