@@ -76,6 +76,26 @@ class PlaybackService : Service() {
     private val reverbParameters = doubleArrayOf(0.55, 0.50, 0.45, 0.15, 1.00, 0.50, 0.50)
     private val eqSettings = ConcurrentHashMap<Int, EqSetting>()
 
+    @Volatile private var transitionSettings = PowerampTransitionSettings()
+    @Volatile private var preloadedSession: PlaybackSession? = null
+    @Volatile private var preloadedQueueIndex = -1
+    @Volatile private var transitionIncoming: PlaybackSession? = null
+    @Volatile private var transitionDurationMs = 0
+    @Volatile private var pendingManualTarget = -1
+    @Volatile private var pendingManualDurationMs = 0
+    @Volatile private var outputTrack: AudioTrack? = null
+    @Volatile private var outputPumpThread: Thread? = null
+    @Volatile private var outputGeneration = 0L
+    @Volatile private var transitionMixer: NativeTransitionMixer? = null
+    @Volatile private var outputFadeMixer: NativeTransitionMixer? = null
+    @Volatile private var pauseAfterFade = false
+    @Volatile private var stopAfterFade = false
+    @Volatile private var pendingSeekAfterFade: Pair<Long, Boolean>? = null
+    @Volatile private var endSilenceRemainingFrames = 0L
+    @Volatile private var endSilenceAppliedForSession = false
+    @Volatile private var preloadBlockedUntil = 0L
+    @Volatile private var fadeInOnStartMs = 0
+
     // Pause when headphones are unplugged or the Bluetooth route drops, instead of
     // blasting the track out of the phone speaker.
     private val noisyReceiver = object : BroadcastReceiver() {
@@ -110,6 +130,7 @@ class PlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(AudioManager::class.java)
+        transitionSettings = PowerampTransitionSettings.read(this)
         val powerManager = getSystemService(PowerManager::class.java)
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Auralis:Playback")
         createNotificationChannel()
@@ -168,7 +189,7 @@ class PlaybackService : Service() {
             wasEmpty
         }
         if (shouldStart) startQueueEntry(0, 0L)
-        else { updateNotification("Added to queue"); persistSession() }
+        else { invalidatePreload(); updateNotification("Added to queue"); persistSession() }
     }
 
     private val persistExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -249,6 +270,8 @@ class PlaybackService : Service() {
             updateNotification("Queue cleared")
         } else if (restartAt >= 0) {
             startQueueEntry(restartAt, 0L, isPlaying())
+        } else {
+            invalidatePreload()
         }
         persistSession()
     }
@@ -265,15 +288,18 @@ class PlaybackService : Service() {
                 else -> queueIndex
             }
         }
+        invalidatePreload()
         persistSession()
     }
 
     fun pausePlayback() {
-        session?.audioTrack?.pause()
-        persistSession()
-        releaseWakeLock()
-        updatePlaybackState(PlaybackState.STATE_PAUSED)
-        updateNotification("Paused")
+        val track = outputTrack ?: return
+        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) return
+        if (transitionSettings.fadePlayPause && transitionSettings.shortFadeMs > 0) {
+            requestOutputFade(1.0f, 0.0f, transitionSettings.shortFadeMs, pauseAfter = true)
+        } else {
+            finishPause(track)
+        }
     }
 
     fun resumePlayback() {
@@ -283,20 +309,32 @@ class PlaybackService : Service() {
             if (index >= 0) startQueueEntry(index, 0L)
             return
         }
-        val track = active.audioTrack ?: return
+        val track = outputTrack ?: active.audioTrack ?: return
         if (!requestAudioFocus()) return
         acquireWakeLock()
-        track.setVolume(1.0f)
-        track.play()
         pausedForFocus = false
+        pauseAfterFade = false
+        stopAfterFade = false
+        track.play()
+        if (transitionSettings.fadePlayPause && transitionSettings.shortFadeMs > 0) {
+            requestOutputFade(0.0f, 1.0f, transitionSettings.shortFadeMs)
+        } else {
+            track.setVolume(1.0f)
+        }
         updatePlaybackState(PlaybackState.STATE_PLAYING)
         updateNotification("Playing")
     }
 
     fun stopPlayback() {
-        stopCurrent()
-        updatePlaybackState(PlaybackState.STATE_STOPPED)
-        updateNotification("Stopped")
+        val track = outputTrack
+        if (track != null && track.playState == AudioTrack.PLAYSTATE_PLAYING &&
+            transitionSettings.fadePlayPause && transitionSettings.shortFadeMs > 0) {
+            requestOutputFade(1.0f, 0.0f, transitionSettings.shortFadeMs, stopAfter = true)
+        } else {
+            stopCurrent()
+            updatePlaybackState(PlaybackState.STATE_STOPPED)
+            updateNotification("Stopped")
+        }
     }
 
     fun skipToNext() = advanceQueue(userInitiated = true)
@@ -305,7 +343,7 @@ class PlaybackService : Service() {
         if (playbackPositionMs() > 3000L) {
             val wasPlaying = isPlaying()
             val index = synchronized(queueLock) { queueIndex }
-            if (index >= 0) startQueueEntry(index, 0L, wasPlaying)
+            if (index >= 0) requestManualQueueChange(index, 0, wasPlaying)
             return
         }
         val target = synchronized(queueLock) {
@@ -315,19 +353,27 @@ class PlaybackService : Service() {
                 else -> -1
             }
         }
-        if (target >= 0) startQueueEntry(target, 0L, isPlaying())
+        if (target >= 0) requestManualQueueChange(target, transitionSettings.manualCrossfadeMs(), isPlaying())
     }
 
     fun seekTo(positionMs: Long) {
         val index = synchronized(queueLock) { queueIndex }
         if (index < 0) return
         val duration = session?.durationMs ?: 0L
-        startQueueEntry(index, positionMs.coerceIn(0L, if (duration > 0L) duration else Long.MAX_VALUE), isPlaying())
+        val target = positionMs.coerceIn(0L, if (duration > 0L) duration else Long.MAX_VALUE)
+        val wasPlaying = isPlaying()
+        if (wasPlaying && transitionSettings.fadeSeek && transitionSettings.seekFadeMs > 0) {
+            pendingSeekAfterFade = target to true
+            fadeInOnStartMs = transitionSettings.seekFadeMs
+            requestOutputFade(1.0f, 0.0f, transitionSettings.seekFadeMs)
+        } else {
+            startQueueEntry(index, target, wasPlaying)
+        }
     }
 
-    fun setShuffle(enabled: Boolean) { shuffleEnabled = enabled }
+    fun setShuffle(enabled: Boolean) { shuffleEnabled = enabled; invalidatePreload() }
     fun isShuffleEnabled(): Boolean = shuffleEnabled
-    fun setRepeatMode(mode: Int) { repeatMode = mode.coerceIn(REPEAT_OFF, REPEAT_ONE) }
+    fun setRepeatMode(mode: Int) { repeatMode = mode.coerceIn(REPEAT_OFF, REPEAT_ONE); invalidatePreload() }
     fun getRepeatMode(): Int = repeatMode
     fun queueSize(): Int = synchronized(queueLock) { queue.size }
     fun currentQueueIndex(): Int = queueIndex
@@ -336,7 +382,7 @@ class PlaybackService : Service() {
     fun skipToQueueIndex(index: Int) {
         val autoPlay = isPlaying()
         val valid = synchronized(queueLock) { index in queue.indices }
-        if (valid) startQueueEntry(index, 0L, autoPlay)
+        if (valid) requestManualQueueChange(index, transitionSettings.manualCrossfadeMs(), autoPlay)
     }
 
     fun clearQueue() {
@@ -345,13 +391,23 @@ class PlaybackService : Service() {
         persistSession()
         updateNotification("Queue cleared")
     }
-    fun isPlaying(): Boolean = session?.audioTrack?.playState == AudioTrack.PLAYSTATE_PLAYING
+    fun isPlaying(): Boolean = outputTrack?.playState == AudioTrack.PLAYSTATE_PLAYING
     fun playbackPositionMs(): Long {
         val s = session ?: return 0L
-        val frames = (s.audioTrack?.playbackHeadPosition?.toLong() ?: 0L) and 0xffffffffL
-        return s.startPositionMs + frames * 1000L / s.sampleRate.coerceAtLeast(1)
+        val track = outputTrack ?: return s.startPositionMs
+        val frames = (track.playbackHeadPosition.toLong() and 0xffffffffL)
+        val relative = (frames - s.outputHeadStartFrames).coerceAtLeast(0L)
+        return s.startPositionMs + relative * 1000L / s.sampleRate.coerceAtLeast(1)
     }
     fun playbackDurationMs(): Long = session?.durationMs ?: 0L
+
+    fun getTransitionSettings(): PowerampTransitionSettings = transitionSettings
+
+    fun setTransitionSettings(settings: PowerampTransitionSettings) {
+        val normalized = settings.normalized()
+        transitionSettings = normalized
+        normalized.write(this)
+    }
 
     fun setStereoWide(enabled: Boolean, percent: Int) {
         synchronized(configLock) {
@@ -428,7 +484,7 @@ class PlaybackService : Service() {
         }
     }
 
-    private fun prepareAndStart(s: PlaybackSession) {
+    private fun prepareAndStart(s: PlaybackSession, forPreload: Boolean = false) {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         try {
@@ -450,7 +506,9 @@ class PlaybackService : Service() {
             extractor.selectTrack(selectedTrack)
             if (s.startPositionMs > 0L) extractor.seekTo(s.startPositionMs * 1000L, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             val mime = format.getString(MediaFormat.KEY_MIME) ?: throw IOException("Missing audio MIME type")
-            val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val sourceRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val sampleRate = if (forPreload && s.targetRate > 0) s.targetRate else sourceRate
+            s.sourceRate = sourceRate
             s.sampleRate = sampleRate
             s.durationMs = (if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) / 1000L else s.entry.durationMs).coerceAtLeast(0L)
             val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
@@ -460,8 +518,6 @@ class PlaybackService : Service() {
             s.codec = codec
             codec.configure(format, null, null, 0)
             codec.start()
-            // Tags are read once per track; the engine keeps them, so later preference changes
-            // only need the new settings.
             val replayGainTags = ReplayGainReader.read(this, s.uri) ?: ReplayGainTags()
             val nativeEngine = NativeAudioEngine(sampleRate)
             s.engine = nativeEngine
@@ -478,60 +534,88 @@ class PlaybackService : Service() {
                 eqSettings.values.forEach { e ->
                     nativeEngine.setEqBand(e.index, e.enabled, e.type, e.frequencyHz, e.q, e.gainDb, e.channel)
                 }
-                // Publish the engine after initial controls are queued. Thereafter UI changes
-                // are the sole producer and the DSP thread remains the sole consumer.
-                s.engine = nativeEngine
             }
-            val minBytes = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
-            val bufferBytes = max(if (minBytes > 0) minBytes else 16384, sampleRate * 2 * 4 / 4)
-            val track = AudioTrack.Builder()
-                .setAudioAttributes(AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                    .build())
-                .setAudioFormat(AudioFormat.Builder()
-                    .setSampleRate(sampleRate)
-                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                    .build())
-                .setBufferSizeInBytes(bufferBytes)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+
+            val track = if (forPreload) null else {
+                val minBytes = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT)
+                val bufferBytes = max(if (minBytes > 0) minBytes else 16384, sampleRate * 2 * 4 / 4)
+                AudioTrack.Builder()
+                    .setAudioAttributes(AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build())
+                    .setAudioFormat(AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                        .build())
+                    .setBufferSizeInBytes(bufferBytes)
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+            }
             s.audioTrack = track
             synchronized(sessionLock) {
-                if (session !== s) throw IOException("Playback request was superseded")
+                if (forPreload) {
+                    if (preloadedSession !== s) throw IOException("Preload request was superseded")
+                } else if (session !== s) {
+                    throw IOException("Playback request was superseded")
+                }
                 s.running.set(true)
-                if (s.autoPlay && requestAudioFocus()) {
-                    acquireWakeLock()
-                    track.play()
-                } else {
-                    pausedForFocus = s.autoPlay
-                    if (s.autoPlay) acquireWakeLock()
+                if (!forPreload) {
+                    outputTrack = track
+                    s.outputHeadStartFrames = 0L
+                    if (s.autoPlay && requestAudioFocus()) {
+                        acquireWakeLock()
+                        track!!.play()
+                    } else {
+                        pausedForFocus = s.autoPlay
+                        if (s.autoPlay) acquireWakeLock()
+                    }
                 }
                 s.dspThread = Thread({ runDsp(s) }, "Auralis-DSP")
-                s.outputThread = Thread({ runOutput(s) }, "Auralis-output")
                 s.decoderThread = Thread({ runDecoder(s, channels) }, "Auralis-decoder")
                 s.dspThread?.start()
-                s.outputThread?.start()
                 s.decoderThread?.start()
-                updateNowPlaying(s.entry)
-                updatePlaybackState(if (track.playState == AudioTrack.PLAYSTATE_PLAYING) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED)
-                updateNotification("Playing audio")
+                if (!forPreload) {
+                    val generation = ++outputGeneration
+                    val output = track!!
+                    val pump = Thread({ runOutput(generation, output) }, "Auralis-output")
+                    outputPumpThread = pump
+                    s.outputThread = pump
+                    val fadeIn = fadeInOnStartMs
+                    fadeInOnStartMs = 0
+                    if (fadeIn > 0 && s.autoPlay) requestOutputFade(0.0f, 1.0f, fadeIn)
+                    pump.start()
+                    endSilenceAppliedForSession = false
+                    endSilenceRemainingFrames = 0L
+                    updateNowPlaying(s.entry)
+                    updatePlaybackState(if (output.playState == AudioTrack.PLAYSTATE_PLAYING) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED)
+                    updateNotification("Playing audio")
+                }
             }
         } catch (t: Throwable) {
             s.running.set(false)
             try { s.audioTrack?.pause(); s.audioTrack?.stop() } catch (_: Throwable) { }
             val failedCurrent = synchronized(sessionLock) {
-                if (session === s) {
-                    session = null
-                    true
-                } else false
+                if (session === s) { session = null; true } else false
+            }
+            val failedPreload = synchronized(sessionLock) {
+                if (preloadedSession === s) { preloadedSession = null; preloadedQueueIndex = -1; true } else false
             }
             if (failedCurrent) {
+                outputGeneration++
+                outputTrack = null
                 releaseWakeLock()
                 abandonAudioFocus()
                 updatePlaybackState(PlaybackState.STATE_STOPPED)
                 updateNotification("Unable to play this audio")
+            }
+            if (failedPreload) preloadBlockedUntil = SystemClock.elapsedRealtime() + 5_000L
+            if (failedPreload && pendingManualTarget >= 0) {
+                val target = pendingManualTarget
+                val shouldPlay = isPlaying()
+                pendingManualTarget = -1
+                Handler(Looper.getMainLooper()).post { startQueueEntry(target, 0L, shouldPlay) }
             }
             scheduleSessionCleanup(s)
         }
@@ -548,6 +632,9 @@ class PlaybackService : Service() {
         var pcmEncoding = AudioFormat.ENCODING_PCM_16BIT
         var actualChannels = sourceChannels.coerceAtLeast(1)
         val info = MediaCodec.BufferInfo()
+        var decoderRate = if (s.sourceRate > 0) s.sourceRate else s.sampleRate
+        var resampler: StreamResampler? =
+            if (decoderRate != s.sampleRate) StreamResampler(decoderRate, s.sampleRate) else null
 
         fun publishStaging() {
             if (stagedFrames == 0) return
@@ -590,13 +677,18 @@ class PlaybackService : Service() {
                             output.position(info.offset)
                             output.limit(info.offset + info.size)
                             convertPcmToStereo(output.slice().order(ByteOrder.LITTLE_ENDIAN), pcmEncoding, actualChannels,
-                                staging, { stagedFrames = it }, { publishStaging() }, s)
+                                staging, { stagedFrames = it }, { publishStaging() }, s, resampler)
                         }
                         decoder.releaseOutputBuffer(outputIndex, false)
                         if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputEos = true
                     }
                     outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         val changed = decoder.outputFormat
+                        val changedRate = changed.integerOr(MediaFormat.KEY_SAMPLE_RATE, decoderRate)
+                        if (changedRate != decoderRate) {
+                            decoderRate = changedRate
+                            resampler = if (decoderRate != s.sampleRate) StreamResampler(decoderRate, s.sampleRate) else null
+                        }
                         pcmEncoding = changed.integerOr(MediaFormat.KEY_PCM_ENCODING, pcmEncoding)
                         actualChannels = changed.integerOr(MediaFormat.KEY_CHANNEL_COUNT, actualChannels).coerceAtLeast(1)
                         if (actualChannels !in 1..2) throw IOException("Decoder output is not mono or stereo")
@@ -618,14 +710,15 @@ class PlaybackService : Service() {
         }
     }
 
-    private inline fun convertPcmToStereo(
+    private fun convertPcmToStereo(
         pcm: ByteBuffer,
         encoding: Int,
         channels: Int,
         staging: ByteBuffer,
         setFrameCount: (Int) -> Unit,
         flush: () -> Unit,
-        s: PlaybackSession
+        s: PlaybackSession,
+        resampler: StreamResampler?
     ) {
         if (channels !in 1..2) throw IOException("Auralis DSP input must be mono or stereo")
         val bytesPerSample = when (encoding) {
@@ -637,17 +730,20 @@ class PlaybackService : Service() {
         val bytesPerFrame = bytesPerSample * channels
         val frameCount = pcm.remaining() / bytesPerFrame
         var framesInChunk = 0
-        repeat(frameCount) {
-            val left = readPcmSample(pcm, encoding)
-            val right = if (channels == 2) readPcmSample(pcm, encoding) else left
-            staging.putFloat(left)
-            staging.putFloat(right)
+        val put: (Float, Float) -> Unit = { l, r ->
+            staging.putFloat(l)
+            staging.putFloat(r)
             framesInChunk++
             if (framesInChunk == 1024) {
                 setFrameCount(1024)
                 flush()
                 framesInChunk = 0
             }
+        }
+        repeat(frameCount) {
+            val left = readPcmSample(pcm, encoding)
+            val right = if (channels == 2) readPcmSample(pcm, encoding) else left
+            if (resampler == null) put(left, right) else resampler.push(left, right, put)
         }
         setFrameCount(framesInChunk)
         if (framesInChunk > 0 && s.running.get()) {
@@ -682,52 +778,325 @@ class PlaybackService : Service() {
         s.dspDone.set(true)
     }
 
-    private fun runOutput(s: PlaybackSession) {
+    private fun runOutput(generation: Long, track: AudioTrack) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-        val engine = s.engine ?: return
-        val track = s.audioTrack ?: return
-        val output = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
-        while (s.running.get() || !s.dspDone.get()) {
-            output.clear()
-            val frames = engine.dequeueOutput(output, 1024)
-            if (frames > 0) {
-                output.position(0)
-                output.limit(frames * 2 * 4)
-                var bytesRemaining = frames * 2 * 4
-                while (bytesRemaining > 0 && s.running.get()) {
-                    val written = track.write(output, bytesRemaining, AudioTrack.WRITE_NON_BLOCKING)
-                    if (written < 0) break
-                    if (written == 0) {
-                        try { Thread.sleep(1) } catch (_: InterruptedException) { break }
-                    } else {
-                        bytesRemaining -= written
-                    }
-                }
+        var currentBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
+        var incomingBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
+        val mixedBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
+        val fadeBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
+        val zeroBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
+        var currentFrames = 0
+        var currentOffset = 0
+        var incomingFrames = 0
+        var incomingOffset = 0
+        var outputBytesWritten = 0L
+        var fadeDrainTargetFrames = -1L
+        var fadeStartFrame = -1L
+
+        fun takeStartFrame(): Long {
+            val f = if (fadeStartFrame >= 0L) fadeStartFrame else outputBytesWritten / 8L
+            fadeStartFrame = -1L
+            return f
+        }
+
+        fun fill(engine: NativeAudioEngine?, buffer: ByteBuffer): Int {
+            if (engine == null) return 0
+            buffer.clear()
+            return engine.dequeueOutput(buffer, 1024)
+        }
+
+        fun slice(buffer: ByteBuffer, frameOffset: Int, frames: Int): ByteBuffer {
+            val view = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+            view.position(frameOffset * 8)
+            view.limit((frameOffset + frames) * 8)
+            return view.slice().order(ByteOrder.LITTLE_ENDIAN)
+        }
+
+        fun writeBlock(source: ByteBuffer, frames: Int) {
+            val fade = outputFadeMixer
+            val block = if (fade != null && !fade.singleFadeComplete) {
+                fadeBuffer.clear()
+                fade.processSingle(source, fadeBuffer, frames)
+                fadeBuffer.position(0)
+                fadeBuffer.limit(frames * 8)
+                fadeBuffer
             } else {
-                if (s.dspDone.get()) break
-                try { Thread.sleep(1) } catch (_: InterruptedException) { break }
+                source.position(0)
+                source.limit(frames * 8)
+                source
+            }
+            var bytesRemaining = frames * 8
+            while (bytesRemaining > 0 && outputGeneration == generation) {
+                val written = track.write(block, bytesRemaining, AudioTrack.WRITE_NON_BLOCKING)
+                if (written < 0) break
+                if (written == 0) {
+                    try { Thread.sleep(1) } catch (_: InterruptedException) { return }
+                } else {
+                    outputBytesWritten += written.toLong()
+                    bytesRemaining -= written
+                }
+            }
+            val activeFade = outputFadeMixer
+            if (activeFade != null && activeFade.singleFadeComplete) {
+                outputFadeMixer = null
+                activeFade.close()
+                if (pauseAfterFade || stopAfterFade || pendingSeekAfterFade != null) {
+                    // The fade block is queued in AudioTrack. Defer pause/stop/seek
+                    // until playbackHeadPosition has actually passed that block.
+                    fadeDrainTargetFrames = outputBytesWritten / 8L
+                }
             }
         }
-        try { track.pause(); track.flush(); track.stop() } catch (_: Throwable) { }
-        if (s.decoderDone.get() && s.dspDone.get() && session === s && s.running.get()) {
-            onPlaybackEnded(s)
+
+        fun startFadeIfReady(active: PlaybackSession, incoming: PlaybackSession) {
+            if (transitionMixer == null) {
+                val ramp = NativeTransitionMixer(active.sampleRate)
+                if (ramp.startCrossfade(transitionDurationMs, 1024)) {
+                    transitionMixer = ramp
+                } else {
+                    ramp.close()
+                    transitionMixer = null
+                }
+            }
+        }
+
+        while (outputGeneration == generation) {
+            if (fadeDrainTargetFrames >= 0L) {
+                while (outputGeneration == generation) {
+                    val head = track.playbackHeadPosition.toLong() and 0xffffffffL
+                    if (head >= fadeDrainTargetFrames) break
+                    try { Thread.sleep(1) } catch (_: InterruptedException) { break }
+                }
+                if (outputGeneration != generation) break
+                fadeDrainTargetFrames = -1L
+                when {
+                    pauseAfterFade -> {
+                        pauseAfterFade = false
+                        finishPause(track)
+                    }
+                    stopAfterFade -> {
+                        stopAfterFade = false
+                        Handler(Looper.getMainLooper()).post {
+                            stopCurrent()
+                            updatePlaybackState(PlaybackState.STATE_STOPPED)
+                            updateNotification("Stopped")
+                        }
+                        break
+                    }
+                    pendingSeekAfterFade != null -> {
+                        val (position, wasPlaying) = pendingSeekAfterFade!!
+                        pendingSeekAfterFade = null
+                        val index = synchronized(queueLock) { queueIndex }
+                        Handler(Looper.getMainLooper()).post {
+                            if (index >= 0) startQueueEntry(index, position, wasPlaying)
+                        }
+                        break
+                    }
+                }
+            }
+            if (track.playState == AudioTrack.PLAYSTATE_PAUSED) {
+                try { Thread.sleep(10) } catch (_: InterruptedException) { break }
+                continue
+            }
+            val active = session ?: break
+            val activeEngine = active.engine
+            maybePreloadNext(active)
+
+            val pendingTarget = pendingManualTarget
+            val prepared = preloadedSession
+            if (pendingTarget >= 0 && prepared != null && prepared.running.get() && prepared.engine != null) {
+                if (prepared.sampleRate == active.sampleRate) {
+                    transitionIncoming = prepared
+                    transitionDurationMs = pendingManualDurationMs
+                    pendingManualTarget = -1
+                    pendingManualDurationMs = 0
+                } else {
+                    val target = pendingTarget
+                    val wasPlaying = track.playState == AudioTrack.PLAYSTATE_PLAYING
+                    pendingManualTarget = -1
+                    pendingManualDurationMs = 0
+                    Handler(Looper.getMainLooper()).post { startQueueEntry(target, 0L, wasPlaying) }
+                    break
+                }
+            }
+
+            maybeBeginAutomaticCrossfade(active)
+            val incoming = transitionIncoming
+
+            if (currentFrames == 0) {
+                currentFrames = fill(activeEngine, currentBuffer)
+                currentOffset = 0
+            }
+
+            if (incoming != null) {
+                if (incoming.sampleRate != active.sampleRate) {
+                    transitionIncoming = null
+                    transitionMixer?.close()
+                    transitionMixer = null
+                } else {
+                    if (incomingFrames == 0) {
+                        incomingFrames = fill(incoming.engine, incomingBuffer)
+                        incomingOffset = 0
+                    }
+                    if (incomingFrames == 0 && transitionMixer?.crossfadeComplete == false &&
+                        !(incoming.decoderDone.get() && incoming.dspDone.get())) {
+                        // Incoming slot is briefly behind: wait instead of letting the
+                        // outgoing song jump back to full gain mid-fade.
+                        try { Thread.sleep(1) } catch (_: InterruptedException) { break }
+                        continue
+                    }
+                    val outgoingEnded = currentFrames == 0 && active.decoderDone.get() && active.dspDone.get()
+                    if (incomingFrames > 0 && (currentFrames > 0 || outgoingEnded)) {
+                        if (fadeStartFrame < 0L) fadeStartFrame = outputBytesWritten / 8L
+                        startFadeIfReady(active, incoming)
+                        val frames = if (currentFrames > 0) minOf(currentFrames - currentOffset, incomingFrames - incomingOffset)
+                            else incomingFrames - incomingOffset
+                        val outSlice = if (currentFrames > 0) slice(currentBuffer, currentOffset, frames) else null
+                        val inSlice = slice(incomingBuffer, incomingOffset, frames)
+                        mixedBuffer.clear()
+                        mixedBuffer.limit(frames * 8)
+                        transitionMixer?.processCrossfade(outSlice, inSlice, mixedBuffer, frames)
+                        if (transitionMixer == null) {
+                            mixedBuffer.position(0)
+                            mixedBuffer.put(inSlice)
+                            mixedBuffer.flip()
+                        }
+                        mixedBuffer.position(0)
+                        writeBlock(mixedBuffer, frames)
+                        if (currentFrames > 0) {
+                            active.framesConsumed += frames
+                            currentOffset += frames
+                        }
+                        incoming.framesConsumed += frames
+                        incomingOffset += frames
+                        if (currentFrames > 0 && currentOffset >= currentFrames) { currentFrames = 0; currentOffset = 0 }
+                        if (incomingOffset >= incomingFrames) { incomingFrames = 0; incomingOffset = 0 }
+                        if (transitionMixer?.crossfadeComplete == true) {
+                            val old = active
+                            finishTransition(old, incoming, track, takeStartFrame())
+                            // Keep any unread incoming frames as the new current stream.
+                            val oldCurrentBuffer = currentBuffer
+                            currentBuffer = incomingBuffer
+                            incomingBuffer = oldCurrentBuffer
+                            currentFrames = incomingFrames
+                            currentOffset = incomingOffset
+                            incomingFrames = 0
+                            incomingOffset = 0
+                        }
+                        continue
+                    }
+                }
+            }
+
+            if (currentFrames > 0) {
+                val frames = currentFrames - currentOffset
+                val block = slice(currentBuffer, currentOffset, frames)
+                writeBlock(block, frames)
+                active.framesConsumed += frames
+                currentFrames = 0
+                currentOffset = 0
+                continue
+            }
+
+            if (active.decoderDone.get() && active.dspDone.get()) {
+                val fadingIn = transitionIncoming
+                if (fadingIn != null && transitionMixer?.crossfadeComplete == false &&
+                    !(fadingIn.decoderDone.get() && fadingIn.dspDone.get())) {
+                    try { Thread.sleep(1) } catch (_: InterruptedException) { break }
+                    continue
+                }
+                if (!endSilenceAppliedForSession && transitionIncoming == null &&
+                    transitionSettings.trackEndSilenceMs > 0) {
+                    endSilenceAppliedForSession = true
+                    endSilenceRemainingFrames = active.sampleRate.toLong() * transitionSettings.trackEndSilenceMs / 1000L
+                }
+                if (endSilenceRemainingFrames > 0L && transitionIncoming == null) {
+                    val frames = minOf(1024L, endSilenceRemainingFrames).toInt()
+                    zeroBuffer.clear()
+                    zeroBuffer.limit(frames * 8)
+                    for (i in 0 until frames * 2) zeroBuffer.putFloat(0.0f)
+                    zeroBuffer.flip()
+                    writeBlock(zeroBuffer, frames)
+                    endSilenceRemainingFrames -= frames
+                    continue
+                }
+
+                val readyNext = preloadedSession
+                if (transitionIncoming != null && readyNext === transitionIncoming) {
+                    // The outgoing slot ended before the fade could complete. Poweramp's
+                    // native path explicitly has a FADE_OUT_CRITICAL no-frames case.
+                    finishTransition(active, readyNext!!, track, takeStartFrame())
+                    val oldCurrentBuffer = currentBuffer
+                    currentBuffer = incomingBuffer
+                    incomingBuffer = oldCurrentBuffer
+                    currentFrames = incomingFrames
+                    currentOffset = incomingOffset
+                    incomingFrames = 0
+                    incomingOffset = 0
+                    continue
+                }
+                if (readyNext != null && readyNext.running.get() && readyNext.engine != null &&
+                    readyNext.sampleRate == active.sampleRate) {
+                    finishTransition(active, readyNext!!, track, takeStartFrame())
+                    val oldCurrentBuffer = currentBuffer
+                    currentBuffer = incomingBuffer
+                    incomingBuffer = oldCurrentBuffer
+                    currentFrames = incomingFrames
+                    currentOffset = incomingOffset
+                    incomingFrames = 0
+                    incomingOffset = 0
+                    continue
+                }
+                if (readyNext != null && !readyNext.decoderDone.get() && !readyNext.dspDone.get()) {
+                    try { Thread.sleep(1) } catch (_: InterruptedException) { break }
+                    continue
+                }
+                val old = active
+                outputGeneration++
+                try { track.pause(); track.flush(); track.stop() } catch (_: Throwable) { }
+                Handler(Looper.getMainLooper()).post {
+                    if (session === old) onPlaybackEnded(old)
+                }
+                break
+            }
+            try { Thread.sleep(1) } catch (_: InterruptedException) { break }
         }
     }
 
     private fun stopCurrent() {
-        val old = synchronized(sessionLock) {
+        val pair = synchronized(sessionLock) {
             val current = session
+            val preload = preloadedSession
             session = null
+            preloadedSession = null
+            preloadedQueueIndex = -1
+            transitionIncoming = null
+            pendingManualTarget = -1
+            pendingManualDurationMs = 0
+            outputGeneration++
             current?.running?.set(false)
-            current
-        } ?: return
-
-        try { old.audioTrack?.pause(); old.audioTrack?.stop() } catch (_: Throwable) { }
+            preload?.running?.set(false)
+            current to preload
+        }
+        val old = pair.first
+        val preload = pair.second
+        transitionMixer?.close()
+        transitionMixer = null
+        outputFadeMixer?.close()
+        outputFadeMixer = null
+        pauseAfterFade = false
+        stopAfterFade = false
+        pendingSeekAfterFade = null
+        endSilenceRemainingFrames = 0L
+        endSilenceAppliedForSession = false
+        outputTrack = null
+        outputPumpThread?.interrupt()
         releaseWakeLock()
         abandonAudioFocus()
         updatePlaybackState(PlaybackState.STATE_STOPPED)
         updateNotification("Auralis is ready")
-        scheduleSessionCleanup(old)
+        if (old != null) scheduleSessionCleanup(old)
+        if (preload != null && preload !== old) scheduleSessionCleanup(preload)
     }
 
     /**
@@ -786,10 +1155,11 @@ class PlaybackService : Service() {
             queue[index]
         }
         stopCurrent()
+        preloadBlockedUntil = 0L
         val next = PlaybackSession(entry, positionMs.coerceAtLeast(0L), autoPlay)
         synchronized(sessionLock) {
             session = next
-            val thread = Thread({ prepareAndStart(next) }, "Auralis-prepare")
+            val thread = Thread({ prepareAndStart(next, false) }, "Auralis-prepare")
             next.prepareThread = thread
             thread.start()
         }
@@ -799,21 +1169,191 @@ class PlaybackService : Service() {
     }
 
     private fun advanceQueue(userInitiated: Boolean) {
-        val target = synchronized(queueLock) {
-            if (queue.isEmpty()) return
-            when {
-                !userInitiated && repeatMode == REPEAT_ONE -> queueIndex
-                shuffleEnabled && queue.size > 1 -> queue.indices.filter { it != queueIndex }.random()
-                queueIndex + 1 < queue.size -> queueIndex + 1
-                repeatMode == REPEAT_ALL -> 0
-                else -> -1
-            }
-        }
-        if (target >= 0) startQueueEntry(target, 0L, if (userInitiated) isPlaying() else true)
-        else {
+        val target = nextQueueIndex(userInitiated)
+        if (target >= 0) {
+            if (userInitiated) requestManualQueueChange(target, transitionSettings.manualCrossfadeMs(), isPlaying())
+            else startQueueEntry(target, 0L, true)
+        } else {
             stopCurrent()
             updateNotification("Queue finished")
         }
+    }
+
+    private fun nextQueueIndex(userInitiated: Boolean): Int = synchronized(queueLock) {
+        if (queue.isEmpty()) return@synchronized -1
+        when {
+            !userInitiated && repeatMode == REPEAT_ONE -> queueIndex
+            shuffleEnabled && queue.size > 1 -> queue.indices.filter { it != queueIndex }.random()
+            queueIndex + 1 < queue.size -> queueIndex + 1
+            repeatMode == REPEAT_ALL -> 0
+            else -> -1
+        }
+    }
+
+    private fun requestManualQueueChange(index: Int, crossfadeMs: Int, autoPlay: Boolean) {
+        val entry = synchronized(queueLock) { queue.getOrNull(index) } ?: return
+        if (crossfadeMs <= 0 || !autoPlay || !isPlaying()) {
+            startQueueEntry(index, 0L, autoPlay)
+            return
+        }
+        val existing = preloadedSession
+        if (existing != null && existing.entry.uri == entry.uri && existing.running.get()) {
+            if (session?.sampleRate == existing.sampleRate) {
+                pendingManualTarget = index
+                pendingManualDurationMs = crossfadeMs
+            } else {
+                startQueueEntry(index, 0L, autoPlay)
+            }
+            return
+        }
+        cancelPreload()
+        pendingManualTarget = index
+        pendingManualDurationMs = crossfadeMs
+        startPreload(index)
+    }
+
+    private fun startPreload(index: Int) {
+        val entry = synchronized(queueLock) { queue.getOrNull(index) } ?: return
+        synchronized(sessionLock) {
+            if (preloadedSession != null || index !in queue.indices) return
+            val next = PlaybackSession(entry, 0L, true).also { it.targetRate = session?.sampleRate ?: 0 }
+            preloadedSession = next
+            preloadedQueueIndex = index
+            val thread = Thread({ prepareAndStart(next, true) }, "Auralis-preload")
+            next.prepareThread = thread
+            thread.start()
+        }
+    }
+
+    private fun cancelPreload() {
+        val stale = synchronized(sessionLock) {
+            val old = preloadedSession
+            preloadedSession = null
+            preloadedQueueIndex = -1
+            transitionIncoming = null
+            old?.running?.set(false)
+            old
+        }
+        if (stale != null) scheduleSessionCleanup(stale)
+    }
+
+    private fun remainingFrames(active: PlaybackSession): Long {
+        val rate = active.sampleRate.toLong().coerceAtLeast(1L)
+        val total = active.durationMs * rate / 1000L
+        val start = active.startPositionMs * rate / 1000L
+        return total - start - active.framesConsumed
+    }
+
+    private fun invalidatePreload() {
+        if (transitionIncoming == null && pendingManualTarget < 0) cancelPreload()
+    }
+
+    private fun maybePreloadNext(active: PlaybackSession) {
+        if (preloadedSession != null || transitionIncoming != null || pendingManualTarget >= 0) return
+        if (SystemClock.elapsedRealtime() < preloadBlockedUntil) return
+        val fadeMs = transitionSettings.automaticCrossfadeMs(shuffleEnabled)
+        val leadMs = max(max(transitionSettings.gaplessPreloadMs, fadeMs + 1500), DEFAULT_PRELOAD_LEAD_MS)
+        if (active.durationMs <= 0L) {
+            // Unknown length: preload as soon as the decoder has read the whole file.
+            if (!active.decoderDone.get()) return
+        } else {
+            val remainingMs = remainingFrames(active) * 1000L / active.sampleRate.coerceAtLeast(1)
+            if (remainingMs > leadMs) return
+        }
+        val next = nextQueueIndex(false)
+        if (next >= 0) startPreload(next)
+    }
+
+    private fun maybeBeginAutomaticCrossfade(active: PlaybackSession) {
+        if (transitionIncoming != null || pendingManualTarget >= 0 || transitionMixer != null) return
+        val next = preloadedSession ?: return
+        if (!next.running.get() || next.engine == null || next.sampleRate != active.sampleRate) return
+        val fadeMs = transitionSettings.automaticCrossfadeMs(shuffleEnabled)
+        if (fadeMs <= 0 || active.durationMs <= 0L) return
+        // Frame-accurate: counted from audio actually handed to the output, not the playback head,
+        // so the fade ends exactly when the outgoing song does.
+        val fadeFrames = active.sampleRate.toLong() * fadeMs / 1000L
+        if (remainingFrames(active) <= fadeFrames) {
+            transitionDurationMs = fadeMs
+            transitionIncoming = next
+        }
+    }
+
+    private fun finishTransition(old: PlaybackSession, incoming: PlaybackSession, track: AudioTrack, startFrame: Long) {
+        val validIndex = synchronized(queueLock) {
+            when {
+                preloadedQueueIndex in queue.indices && queue[preloadedQueueIndex].uri == incoming.entry.uri -> preloadedQueueIndex
+                else -> queue.indexOfFirst { it.uri == incoming.entry.uri }
+            }
+        }
+        if (validIndex < 0) {
+            transitionIncoming = null
+            transitionMixer?.close()
+            transitionMixer = null
+            cancelPreload()
+            return
+        }
+        synchronized(sessionLock) {
+            if (session !== old || preloadedSession !== incoming) return
+            session = incoming
+            queueIndex = validIndex
+            preloadedSession = null
+            preloadedQueueIndex = -1
+            transitionIncoming = null
+            incoming.audioTrack = track
+            incoming.outputHeadStartFrames = startFrame
+            incoming.outputThread = outputPumpThread
+            old.audioTrack = null
+            old.outputThread = null
+        }
+        transitionMixer?.close()
+        transitionMixer = null
+        transitionDurationMs = 0
+        endSilenceRemainingFrames = 0L
+        endSilenceAppliedForSession = false
+        old.running.set(false)
+        updateNowPlaying(incoming.entry)
+        updatePlaybackState(if (track.playState == AudioTrack.PLAYSTATE_PLAYING) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED)
+        updateNotification("Playing audio")
+        persistSession(0L)
+        PlayHistory.record(this, incoming.entry.uri)
+        scheduleSessionCleanup(old)
+    }
+
+    private fun requestOutputFade(start: Float, end: Float, durationMs: Int,
+                                  pauseAfter: Boolean = false, stopAfter: Boolean = false) {
+        val rate = session?.sampleRate ?: outputTrack?.sampleRate ?: return
+        outputFadeMixer?.close()
+        val fade = NativeTransitionMixer(rate)
+        outputFadeMixer = fade
+        pauseAfterFade = pauseAfter
+        stopAfterFade = stopAfter
+        if (!fade.startSingleFade(start, end, durationMs, 1024)) {
+            outputFadeMixer = null
+            fade.close()
+            when {
+                pauseAfter -> outputTrack?.let { finishPause(it) }
+                stopAfter -> {
+                    stopCurrent()
+                    updatePlaybackState(PlaybackState.STATE_STOPPED)
+                    updateNotification("Stopped")
+                }
+                pendingSeekAfterFade != null -> {
+                    val (position, wasPlaying) = pendingSeekAfterFade!!
+                    pendingSeekAfterFade = null
+                    val index = synchronized(queueLock) { queueIndex }
+                    if (index >= 0) startQueueEntry(index, position, wasPlaying)
+                }
+            }
+        }
+    }
+
+    private fun finishPause(track: AudioTrack) {
+        try { track.pause() } catch (_: Throwable) { }
+        releaseWakeLock()
+        persistSession()
+        updatePlaybackState(PlaybackState.STATE_PAUSED)
+        updateNotification("Paused")
     }
 
     private fun onPlaybackEnded(s: PlaybackSession) {
@@ -858,10 +1398,10 @@ class PlaybackService : Service() {
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
             AudioManager.AUDIOFOCUS_GAIN -> {
-                session?.audioTrack?.setVolume(1.0f)
+                outputTrack?.setVolume(1.0f)
                 if (pausedForFocus) {
-                    if (session?.audioTrack != null) acquireWakeLock()
-                    session?.audioTrack?.play()
+                    if (outputTrack != null) acquireWakeLock()
+                    outputTrack?.play()
                     pausedForFocus = false
                     updatePlaybackState(PlaybackState.STATE_PLAYING)
                     updateNotification("Playing")
@@ -869,11 +1409,11 @@ class PlaybackService : Service() {
             }
             AudioManager.AUDIOFOCUS_LOSS, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
                 pausedForFocus = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                session?.audioTrack?.pause()
+                outputTrack?.pause()
                 releaseWakeLock()
                 updatePlaybackState(PlaybackState.STATE_PAUSED)
             }
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> session?.audioTrack?.setVolume(0.2f)
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> outputTrack?.setVolume(0.2f)
         }
     }
 
@@ -998,6 +1538,9 @@ class PlaybackService : Service() {
     private inner class PlaybackSession(val entry: QueueEntry, val startPositionMs: Long = 0L, val autoPlay: Boolean = true) {
         val uri: Uri = entry.uri
         @Volatile var sampleRate: Int = 48000
+        @Volatile var sourceRate: Int = 0
+        @Volatile var targetRate: Int = 0
+        @Volatile var framesConsumed: Long = 0L
         @Volatile var durationMs: Long = entry.durationMs
         val running = AtomicBoolean(false)
         val decoderDone = AtomicBoolean(false)
@@ -1009,6 +1552,7 @@ class PlaybackService : Service() {
         @Volatile var codec: MediaCodec? = null
         @Volatile var engine: NativeAudioEngine? = null
         @Volatile var audioTrack: AudioTrack? = null
+        @Volatile var outputHeadStartFrames: Long = 0L
         @Volatile var decoderThread: Thread? = null
         @Volatile var dspThread: Thread? = null
         @Volatile var outputThread: Thread? = null
@@ -1027,5 +1571,6 @@ class PlaybackService : Service() {
         private const val ACTION_PREVIOUS = "com.auralis.action.PREVIOUS"
         private const val CHANNEL_ID = "auralis-playback"
         private const val NOTIFICATION_ID = 41
+        private const val DEFAULT_PRELOAD_LEAD_MS = 3_000
     }
 }
