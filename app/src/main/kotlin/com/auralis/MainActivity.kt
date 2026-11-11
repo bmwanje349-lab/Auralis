@@ -127,6 +127,19 @@ class MainActivity : Activity() {
     private lateinit var nowPositionLabel: TextView
     private lateinit var nowDurationLabel: TextView
     private val eqControls = mutableListOf<EqUiControl>()
+    private val soundStore by lazy { SoundStore(this) }
+    private lateinit var graphicEq: GraphicEqView
+    private lateinit var eqPowerToggle: CompoundButton
+    private lateinit var eqPresetLabel: TextView
+    private val eqPresetChips = linkedMapOf<String, TextView>()
+    private var eqPresetName = SoundPresets.FLAT
+    private var settingsPageView: View? = null
+    private var libraryFingerprint = Long.MIN_VALUE
+    private val autoScanRunnable = Runnable { if (hasLibraryPermission()) refreshLibrary() }
+    private val mediaObserver = object : android.database.ContentObserver(uiHandler) {
+        override fun onChange(selfChange: Boolean) { scheduleAutoScan() }
+    }
+    private var mediaObserverRegistered = false
     private val artworkExecutor: ExecutorService = Executors.newFixedThreadPool(2)
     private val libraryQueryExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "Auralis-library-query").apply { isDaemon = true }
@@ -176,7 +189,12 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(serviceIntent) else startService(serviceIntent)
         bound = bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
         if (savedInstanceState == null) handleViewIntent(intent)
-        requestLibraryPermissionOrLoad()
+        val launchPrefs = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
+        if (hasLibraryPermission() || launchPrefs.getBoolean(KEY_WELCOME_SEEN, false)) {
+            requestLibraryPermissionOrLoad(fromUser = false)
+        } else {
+            showWelcome()
+        }
     }
 
     private val cBackground = Color.rgb(8, 13, 18)
@@ -443,7 +461,7 @@ class MainActivity : Activity() {
         header.addView(wordmark, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(iconControl(R.drawable.ic_search, "Search music", 42, cSurface) { showSearch() },
             LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(8) })
-        header.addView(iconControl(R.drawable.ic_add, "Open an audio file", 42, cSurface) { chooseAudio() },
+        header.addView(iconControl(R.drawable.ic_settings, "Settings", 42, cSurface) { showSettings() },
             LinearLayout.LayoutParams(dp(42), dp(42)))
         topHeader = header
         root.addView(header)
@@ -529,6 +547,7 @@ class MainActivity : Activity() {
         window.statusBarColor = cBackground
         window.navigationBarColor = cBackground
         dspPage = buildDspPage()
+        restoreSound()
         showHome()
     }
 
@@ -736,7 +755,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginEnd = dp(12) })
         val soundText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         soundText.addView(uiText("Shape your sound", 16f, cText, true))
-        soundText.addView(uiText("StereoWide, EQ, preamp and more", 12.5f, cMuted).apply { setPadding(0, dp(4), 0, 0) })
+        soundText.addView(uiText("Presets, equalizer, StereoWide and more", 12.5f, cMuted).apply { setPadding(0, dp(4), 0, 0) })
         soundRow.addView(soundText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         soundRow.addView(uiText("›", 24f, cAccent, true))
         soundRow.setOnClickListener { showDsp() }
@@ -790,11 +809,11 @@ class MainActivity : Activity() {
         val icon = ImageView(this).apply {
             setImageResource(when (title) {
                 "Output level" -> R.drawable.ic_tune
-                "StereoWide", "Stereo placement" -> R.drawable.ic_equalizer
-                "Equalizer" -> R.drawable.ic_library
-                "ReplayGain" -> R.drawable.ic_album
-                "Reverb" -> R.drawable.ic_headphones
-                "Dynamics" -> R.drawable.ic_music_note
+                "StereoWide", "Stereo placement" -> R.drawable.ic_headphones
+                "Equalizer" -> R.drawable.ic_equalizer
+                "Volume levelling" -> R.drawable.ic_music_note
+                "Reverb" -> R.drawable.ic_album
+                "Dynamics" -> R.drawable.ic_tune
                 else -> R.drawable.ic_tune
             })
             imageTintList = ColorStateList.valueOf(cAccent)
@@ -944,6 +963,75 @@ class MainActivity : Activity() {
             setPadding(dp(2), 0, 0, dp(11))
         })
 
+        dspCard(content, "Equalizer", "Pick a preset, or drag the bands to taste.", initiallyExpanded = true) { body ->
+            eqPowerToggle = dspSwitch(body, "Equalizer", "Turn tone shaping on or off.") { _ ->
+                applyGraphicEq()
+                updateEqPresetUi()
+                saveSound()
+            }
+            body.addView(uiText("PRESETS", 10f, cMuted, true).apply {
+                letterSpacing = 0.12f
+                setPadding(0, dp(6), 0, dp(10))
+            }, matchWrap())
+            val presetScroll = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+            }
+            val presetRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            SoundPresets.all.forEach { preset ->
+                val chip = uiText(preset.name, 13f, cText, true).apply {
+                    gravity = Gravity.CENTER
+                    setPadding(dp(16), dp(11), dp(16), dp(11))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { applyEqPreset(preset) }
+                }
+                eqPresetChips[preset.name] = chip
+                presetRow.addView(chip, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(8) })
+            }
+            presetScroll.addView(presetRow)
+            body.addView(presetScroll, matchWrap())
+            eqPresetLabel = uiText("", 12f, cMuted).apply { setPadding(0, dp(12), 0, dp(10)) }
+            body.addView(eqPresetLabel, matchWrap())
+
+            graphicEq = GraphicEqView(this).apply {
+                setPalette(cAccent, cText, cMuted, cBorder, cSurfaceRaised)
+                onBandChanged = { band -> onGraphicBandDragged(band) }
+            }
+            body.addView(graphicEq, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+            body.addView(materialAction("Reset to flat", false, true).apply {
+                setOnClickListener { applyEqPreset(SoundPresets.all.first()) }
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)
+            ).apply { topMargin = dp(8) })
+
+            dspDisclosure(body, "Advanced: custom bands", "Add precise filters of your own") { advanced ->
+                val eqHeader = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                eqCount = uiText("0 custom bands", 12f, cMuted)
+                eqHeader.addView(eqCount, LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                ))
+                eqHeader.addView(materialAction("Add band", true, true).apply {
+                    setOnClickListener { showAddEqBandDialog() }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)))
+                advanced.addView(eqHeader, matchWrap().apply { topMargin = dp(8); bottomMargin = dp(12) })
+                eqContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                advanced.addView(eqContainer, matchWrap())
+                advanced.addView(materialAction("Remove custom bands", false, true).apply {
+                    setOnClickListener { clearCustomBands() }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(42)))
+                updateEqCount()
+            }
+            updateEqPresetUi()
+        }
+
         dspCard(content, "Output level", "Set the overall level of your music.", initiallyExpanded = true) { body ->
             val saved = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
                 .getInt(KEY_MASTER_PREAMP, 150).coerceIn(0, 300)
@@ -1052,27 +1140,7 @@ class MainActivity : Activity() {
             }
         }
 
-        dspCard(content, "Equalizer", "Shape the tone with bass and treble controls.") { body ->
-            val eqHeader = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            eqCount = uiText("2 bands available", 12f, cMuted)
-            eqHeader.addView(eqCount, LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
-            ))
-            eqHeader.addView(materialAction("Add band", true, true).apply {
-                setOnClickListener { showAddEqBandDialog() }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)))
-            body.addView(eqHeader, matchWrap().apply { bottomMargin = dp(12) })
-            eqContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            body.addView(eqContainer, matchWrap())
-            addEqBand(eqContainer, "Bass shelf · 90 Hz · Q 0.8", 0, 4, 90, 0.8)
-            addEqBand(eqContainer, "Treble shelf · 10,000 Hz · Q 0.6", 1, 5, 10000, 0.6)
-            updateEqCount()
-        }
-
-        dspCard(content, "ReplayGain", "Keep the volume more consistent between tracks.") { body ->
+        dspCard(content, "Volume levelling", "Keep songs at a similar loudness, so you are not reaching for the volume.") { body ->
             replayModeButton = materialAction(replayModeText(), false, true).apply {
                 textSize = 13f
                 setOnClickListener {
@@ -1081,7 +1149,7 @@ class MainActivity : Activity() {
                     applyReplayGain()
                 }
             }
-            body.addView(uiText("GAIN MODE", 10f, cMuted, true), matchWrap())
+            body.addView(uiText("VOLUME LEVELLING", 10f, cMuted, true), matchWrap())
             body.addView(replayModeButton, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
             ).apply { topMargin = dp(7); bottomMargin = dp(15) })
@@ -1094,13 +1162,13 @@ class MainActivity : Activity() {
                     applyReplayGain()
                 }
             }
-            body.addView(uiText("PREFERRED TAG SOURCE", 10f, cMuted, true), matchWrap())
+            body.addView(uiText("MATCH LEVELS BY", 10f, cMuted, true), matchWrap())
             body.addView(replaySourceButton, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
             ).apply { topMargin = dp(7); bottomMargin = dp(13) })
 
             val (default, _) = dspSlider(
-                body, "DEFAULT GAIN WITHOUT TAGS", 150f, 300f, 1f,
+                body, "LEVEL FOR SONGS WITHOUT LEVEL INFO", 150f, 300f, 1f,
                 { replayDbText(it.toInt()) }
             ) { _ -> applyReplayGain() }
             replayDefaultSlider = default
@@ -1150,12 +1218,12 @@ class MainActivity : Activity() {
                 playback?.setLimiter(enabled, limiterPath)
             }
             addDspDivider(body)
-            limiterPathButton = materialAction("Path: Hard ceiling (1.0)", false, true).apply {
+            body.addView(uiText("PROTECTION STYLE", 10f, cMuted, true), matchWrap())
+            limiterPathButton = materialAction(limiterPathText(), false, true).apply {
                 textSize = 13f
                 setOnClickListener {
                     limiterPath = if (limiterPath == 0) 1 else 0
-                    text = if (limiterPath == 0) "Path: Hard ceiling (1.0)"
-                    else "Path: Pre-gain protection"
+                    text = limiterPathText()
                     playback?.setLimiter(limiterToggle.isChecked, limiterPath)
                 }
             }
@@ -1253,13 +1321,14 @@ class MainActivity : Activity() {
     private fun audioPermission(): String = if (Build.VERSION.SDK_INT >= 33)
         Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
 
-    private fun requestLibraryPermissionOrLoad() {
+    private fun requestLibraryPermissionOrLoad(fromUser: Boolean = true) {
         val permission = audioPermission()
         val prefs = getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         if (Build.VERSION.SDK_INT < 23 || checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
             refreshLibrary()
             askNotificationPermissionOnce()
         } else if (prefs.getBoolean(KEY_LIBRARY_PERMISSION_ASKED, false) && !shouldShowRequestPermissionRationale(permission)) {
+            if (!fromUser) return
             Toast.makeText(this, "Turn on Music and audio access for Auralis in Settings", Toast.LENGTH_LONG).show()
             runCatching {
                 startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -1289,7 +1358,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun refreshLibrary() {
+    private fun refreshLibrary(force: Boolean = false, onDone: ((Int) -> Unit)? = null) {
         Thread({
             val loaded = runCatching { MediaLibraryRepository.load(this) }.getOrElse {
                 runOnUiThread { Toast.makeText(this, "Could not scan audio: ${it.message ?: "unknown error"}", Toast.LENGTH_LONG).show() }
@@ -1304,7 +1373,13 @@ class MainActivity : Activity() {
             val albums = loaded.groupBy { it.album to it.artist }.values
                 .mapNotNull { group -> group.maxByOrNull { it.dateAddedSeconds } }
                 .sortedByDescending { it.dateAddedSeconds }
+            val fingerprint = loaded.fold(17L) { hash, track -> hash * 31L + track.id * 7L + track.dateAddedSeconds }
             runOnUiThread {
+                if (!force && fingerprint == libraryFingerprint) {
+                    onDone?.invoke(loaded.size)
+                    return@runOnUiThread
+                }
+                libraryFingerprint = fingerprint
                 libraryTracks.clear()
                 libraryTracks.addAll(loaded)
                 librarySnapshot = loaded
@@ -1313,6 +1388,7 @@ class MainActivity : Activity() {
                 librarySearchIndex = searchIndex
                 homeRecentTracks = recent
                 homeAlbumTracks = albums
+                onDone?.invoke(loaded.size)
                 if (::contentFrame.isInitialized) {
                     when (activeDestination) {
                         DEST_HOME -> showHome(refreshContent = true)
@@ -2434,8 +2510,8 @@ class MainActivity : Activity() {
     }
 
         private fun showAddEqBandDialog() {
-        if (eqControls.size >= MAX_EQ_BANDS) {
-            Toast.makeText(this, "The recovered model supports 64 bands.", Toast.LENGTH_SHORT).show()
+        if (SoundPresets.BAND_COUNT + eqControls.size >= MAX_EQ_BANDS) {
+            Toast.makeText(this, "That is the maximum number of custom bands.", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -2474,7 +2550,7 @@ class MainActivity : Activity() {
         form.addView(qInput, matchWrap())
         form.addView(label("Band gain in dB"))
         form.addView(gainInput, matchWrap())
-        form.addView(label("Channel selection (Auralis-local numeric mapping)"))
+        form.addView(label("Apply to"))
         form.addView(channelSpinner, matchWrap())
 
         val dialog = AlertDialog.Builder(this)
@@ -2500,7 +2576,7 @@ class MainActivity : Activity() {
                     gain == null || gain < -15.0 || gain > 15.0 ->
                         Toast.makeText(this, "Gain must be between -15 and +15 dB.", Toast.LENGTH_SHORT).show()
                     else -> {
-                        val index = eqControls.size
+                        val index = SoundPresets.BAND_COUNT + eqControls.size
                         val title = "${FILTER_SHORT_NAMES[type]} · $frequency Hz · Q ${"%.2f".format(q)}"
                         addEqBand(eqContainer, title, index, type, frequency, q, channel, gain)
                         playback?.setEqBand(index, false, type, frequency, q, gain, channel)
@@ -2514,8 +2590,8 @@ class MainActivity : Activity() {
 
     private fun updateEqCount() {
         if (::eqCount.isInitialized) {
-            eqCount.text = if (eqControls.size == 1) "1 band available"
-            else "${eqControls.size} bands available"
+            eqCount.text = if (eqControls.size == 1) "1 custom band"
+            else "${eqControls.size} custom bands"
         }
     }
 
@@ -2592,12 +2668,12 @@ class MainActivity : Activity() {
     }
 
     private fun replayModeText() = when (replayMode) {
-        0 -> "Mode: None"
-        1 -> "Mode: Apply"
-        else -> "Mode: Apply Peak (limit to peak headroom)"
+        0 -> "Levelling: Off"
+        1 -> "Levelling: On"
+        else -> "Levelling: On, protect peaks"
     }
 
-    private fun replaySourceText() = if (replaySource == 0) "Source: Album (falls back to track)" else "Source: Track"
+    private fun replaySourceText() = if (replaySource == 0) "Match: Whole album" else "Match: Each song"
 
     // Slider progress 0..300 maps to -15.0..+15.0 dB in 0.1 dB steps.
     private fun replayDbText(progress: Int) = "%+.1f dB".format((progress - 150) / 10.0)
@@ -2606,7 +2682,7 @@ class MainActivity : Activity() {
         if (!::replayDefaultSlider.isInitialized || !::replayPreampSlider.isInitialized) return
         playback?.setReplayGain(replayMode, replaySource,
             (replayDefaultSlider.value.toInt() - 150) * 10)
-        playback?.setMasterGainDb((replayPreampSlider.value.toInt() - 150) / 10.0)
+        applyMasterGain()
         getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit()
             .putInt(KEY_MASTER_PREAMP, replayPreampSlider.value.toInt()).apply()
     }
@@ -2621,10 +2697,309 @@ class MainActivity : Activity() {
         playback?.setMono(monoToggle.isChecked)
         playback?.setLimiter(limiterToggle.isChecked, limiterPath)
         applyReplayGain()
+        applyGraphicEq()
         eqControls.forEach { c ->
             val db = (c.gain.value.toInt() - 150) / 10.0
             playback?.setEqBand(c.index, c.enabled.isChecked, c.type, c.frequency, c.q, db, c.channel)
         }
+    }
+
+    // ---- Sound: presets, remembering settings, reset --------------------------------------
+
+    private fun limiterPathText() = if (limiterPath == 0) "Style: Hard ceiling" else "Style: Gain-aware"
+
+    private fun bandTitle(type: Int, frequency: Int, q: Double) =
+        "${FILTER_SHORT_NAMES[type.coerceIn(0, FILTER_SHORT_NAMES.lastIndex)]} · $frequency Hz · Q ${"%.2f".format(q)}"
+
+    private fun applyGraphicBand(index: Int) {
+        if (!::graphicEq.isInitialized || !::eqPowerToggle.isInitialized) return
+        playback?.setEqBand(
+            index, eqPowerToggle.isChecked, SoundPresets.bandType(index),
+            SoundPresets.BAND_FREQUENCIES[index], SoundPresets.bandQ(index),
+            graphicEq.gains[index].toDouble(), 0
+        )
+    }
+
+    private fun applyGraphicEq() {
+        if (!::graphicEq.isInitialized || !::eqPowerToggle.isInitialized) return
+        for (i in 0 until SoundPresets.BAND_COUNT) applyGraphicBand(i)
+        applyMasterGain()
+    }
+
+    // Boosting bands raises the loudest peaks, so the master level backs off a little to leave
+    // headroom and avoid clipping. The listener's own Output level slider is never moved.
+    private fun eqHeadroomDb(): Double {
+        if (!::graphicEq.isInitialized || !::eqPowerToggle.isInitialized || !eqPowerToggle.isChecked) return 0.0
+        val peak = graphicEq.gains.maxOrNull() ?: 0f
+        return if (peak > 0f) peak * 0.6 else 0.0
+    }
+
+    private fun applyMasterGain() {
+        if (!::replayPreampSlider.isInitialized) return
+        playback?.setMasterGainDb((replayPreampSlider.value.toInt() - 150) / 10.0 - eqHeadroomDb())
+    }
+
+    private fun applyEqPreset(preset: EqPreset) {
+        eqPresetName = preset.name
+        graphicEq.setGains(preset.gains)
+        if (preset.name != SoundPresets.FLAT && !eqPowerToggle.isChecked) {
+            eqPowerToggle.isChecked = true   // its listener pushes every band
+        } else {
+            applyGraphicEq()
+        }
+        updateEqPresetUi()
+        saveSound()
+    }
+
+    private fun onGraphicBandDragged(band: Int) {
+        eqPresetName = SoundPresets.CUSTOM
+        if (!eqPowerToggle.isChecked) {
+            eqPowerToggle.isChecked = true
+        } else {
+            applyGraphicBand(band)
+            applyMasterGain()
+        }
+        updateEqPresetUi()
+    }
+
+    private fun updateEqPresetUi() {
+        if (!::eqPowerToggle.isInitialized || !::graphicEq.isInitialized || !::eqPresetLabel.isInitialized) return
+        val on = eqPowerToggle.isChecked
+        graphicEq.bandsEnabled = on
+        eqPresetChips.forEach { (name, chip) ->
+            val selected = name == eqPresetName && (on || name == SoundPresets.FLAT)
+            chip.background = roundedBackground(if (selected) cAccent else cSurfaceSoft, 18)
+            chip.setTextColor(if (selected) Color.rgb(6, 29, 23) else cText)
+        }
+        val preset = SoundPresets.byName(eqPresetName)
+        eqPresetLabel.text = when {
+            !on -> "Equalizer is off. Choose a preset to turn it on."
+            preset != null -> "${preset.name} · ${preset.blurb}"
+            else -> "Custom · your own settings"
+        }
+    }
+
+    private fun clearCustomBands() {
+        eqControls.forEach { c ->
+            playback?.setEqBand(c.index, false, c.type, c.frequency, c.q, 0.0, c.channel)
+        }
+        eqControls.clear()
+        if (::eqContainer.isInitialized) eqContainer.removeAllViews()
+        updateEqCount()
+    }
+
+    private fun captureSound(): SoundSnapshot = SoundSnapshot(
+        stereoOn = stereoToggle.isChecked,
+        stereoWidth = stereoSlider.value.toInt(),
+        balanceOn = balanceToggle.isChecked,
+        balance = balanceSlider.value.toInt(),
+        mono = monoToggle.isChecked,
+        reverbOn = reverbToggle.isChecked,
+        reverb = IntArray(7) { i -> reverbSliders[i]?.value?.toInt() ?: reverbInitial[i] },
+        limiterOn = limiterToggle.isChecked,
+        limiterPath = limiterPath,
+        replayMode = replayMode,
+        replaySource = replaySource,
+        replayDefault = replayDefaultSlider.value.toInt(),
+        eqOn = eqPowerToggle.isChecked,
+        eqGains = graphicEq.gains.copyOf(),
+        eqPreset = eqPresetName,
+        bands = eqControls.map { c ->
+            ParametricBand(c.type, c.frequency, c.q, (c.gain.value.toInt() - 150) / 10.0, c.channel, c.enabled.isChecked)
+        }
+    )
+
+    private fun saveSound() {
+        if (!::dspPage.isInitialized || !::graphicEq.isInitialized || !::replayDefaultSlider.isInitialized) return
+        runCatching { soundStore.save(captureSound()) }
+    }
+
+    private fun restoreSound() {
+        val saved = soundStore.load() ?: return
+        runCatching {
+            stereoSlider.value = saved.stereoWidth.toFloat()
+            stereoToggle.isChecked = saved.stereoOn
+            balanceSlider.value = saved.balance.toFloat()
+            balanceToggle.isChecked = saved.balanceOn
+            monoToggle.isChecked = saved.mono
+            saved.reverb.forEachIndexed { i, v -> reverbSliders[i]?.value = v.toFloat() }
+            reverbToggle.isChecked = saved.reverbOn
+            limiterPath = saved.limiterPath
+            limiterPathButton.text = limiterPathText()
+            limiterToggle.isChecked = saved.limiterOn
+            replayMode = saved.replayMode
+            replaySource = saved.replaySource
+            replayModeButton.text = replayModeText()
+            replaySourceButton.text = replaySourceText()
+            replayDefaultSlider.value = saved.replayDefault.toFloat()
+            saved.bands.forEach { b ->
+                addEqBand(eqContainer, bandTitle(b.type, b.frequency, b.q),
+                    SoundPresets.BAND_COUNT + eqControls.size, b.type, b.frequency, b.q, b.channel, b.gainDb)
+                eqControls.lastOrNull()?.enabled?.isChecked = b.enabled
+            }
+            graphicEq.setGains(saved.eqGains)
+            eqPresetName = saved.eqPreset
+            eqPowerToggle.isChecked = saved.eqOn
+            updateEqPresetUi()
+        }
+    }
+
+    private fun resetSound() {
+        clearCustomBands()
+        eqPresetName = SoundPresets.FLAT
+        graphicEq.setGains(FloatArray(SoundPresets.BAND_COUNT))
+        eqPowerToggle.isChecked = false
+        stereoToggle.isChecked = false
+        stereoSlider.value = 0f
+        balanceToggle.isChecked = false
+        balanceSlider.value = 100f
+        monoToggle.isChecked = false
+        reverbToggle.isChecked = false
+        reverbInitial.forEachIndexed { i, v -> reverbSliders[i]?.value = v.toFloat() }
+        limiterToggle.isChecked = false
+        limiterPath = 0
+        limiterPathButton.text = limiterPathText()
+        replayMode = 0
+        replaySource = 0
+        replayModeButton.text = replayModeText()
+        replaySourceButton.text = replaySourceText()
+        replayDefaultSlider.value = 150f
+        replayPreampSlider.value = 150f
+        applyGraphicEq()
+        applyReplayGain()
+        updateEqPresetUi()
+        saveSound()
+    }
+
+    private fun confirmResetSound() {
+        AlertDialog.Builder(this)
+            .setTitle("Reset sound settings?")
+            .setMessage("The equalizer, StereoWide, balance, reverb and every other sound control will return to their defaults.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Reset") { _, _ ->
+                resetSound()
+                Toast.makeText(this, "Sound settings reset", Toast.LENGTH_SHORT).show()
+            }
+            .show()
+    }
+
+    // ---- Library: permission, welcome, automatic rescans -----------------------------------
+
+    private fun hasLibraryPermission(): Boolean =
+        Build.VERSION.SDK_INT < 23 || checkSelfPermission(audioPermission()) == PackageManager.PERMISSION_GRANTED
+
+    private fun scheduleAutoScan() {
+        uiHandler.removeCallbacks(autoScanRunnable)
+        uiHandler.postDelayed(autoScanRunnable, 2500L)
+    }
+
+    private fun showWelcome() {
+        getSharedPreferences(PREFERENCES, MODE_PRIVATE).edit().putBoolean(KEY_WELCOME_SEEN, true).apply()
+        AlertDialog.Builder(this)
+            .setTitle("Welcome to Auralis")
+            .setMessage("Auralis plays the music already on your phone.\n\nTo build your library it needs permission to read your audio files. Your music never leaves your device: Auralis has no accounts, no ads and no tracking.")
+            .setCancelable(false)
+            .setPositiveButton("Continue") { _, _ -> requestLibraryPermissionOrLoad(fromUser = true) }
+            .setNegativeButton("Not now", null)
+            .show()
+    }
+
+    // ---- Settings page -----------------------------------------------------------------
+
+    private fun showSettings() {
+        setAppChromeVisible(true)
+        activeDestination = DEST_SETTINGS
+        updateNavigationState()
+        updateMiniPlayer()
+        settingsPageView?.let { contentFrame.removeView(it) }
+        val page = buildSettingsPage()
+        settingsPageView = page
+        displayContentPage(page)
+    }
+
+    private fun settingsGroup(parent: LinearLayout, title: String, build: (LinearLayout) -> Unit) {
+        parent.addView(uiText(title.uppercase(), 10f, cAccent, true).apply {
+            letterSpacing = 0.13f
+            setPadding(dp(2), dp(8), 0, dp(10))
+        }, matchWrap())
+        val card = roundedCard(cSurface, 22)
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(4), dp(18), dp(4))
+        }
+        build(column)
+        card.addView(column)
+        parent.addView(card, matchWrap().apply { bottomMargin = dp(18) })
+    }
+
+    private fun settingsRow(parent: LinearLayout, title: String, detail: String, onClick: (() -> Unit)? = null) {
+        if (parent.childCount > 0) addDspDivider(parent)
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(60)
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        if (onClick != null) {
+            row.isClickable = true
+            row.isFocusable = true
+            row.setOnClickListener { onClick() }
+        }
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(uiText(title, 15f, cText, true))
+        copy.addView(uiText(detail, 12f, cMuted).apply { setPadding(0, dp(5), 0, 0) })
+        row.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (onClick != null) row.addView(uiText("›", 24f, cAccent, true))
+        parent.addView(row, matchWrap())
+    }
+
+    private fun buildSettingsPage(): View {
+        val page = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(cBackground) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(23), dp(24), dp(38))
+        }
+        content.addView(uiText("SETTINGS", 11f, cAccent, true).apply { letterSpacing = 0.18f })
+        content.addView(uiText("Make Auralis yours.", 29f, cText, true).apply { setPadding(0, dp(7), 0, dp(22)) })
+
+        settingsGroup(content, "Library") { group ->
+            settingsRow(group, "Rescan music library", "${libraryTracks.size} songs found on this device.") {
+                if (!hasLibraryPermission()) {
+                    requestLibraryPermissionOrLoad()
+                } else {
+                    refreshLibrary(force = true) { count ->
+                        Toast.makeText(this, "Library updated · $count songs", Toast.LENGTH_SHORT).show()
+                        if (activeDestination == DEST_SETTINGS) showSettings()
+                    }
+                }
+            }
+            settingsRow(group, "Open an audio file", "Play a single file from anywhere on your phone.") { chooseAudio() }
+        }
+        settingsGroup(content, "Sound") { group ->
+            settingsRow(group, "Open Sound Studio", "Presets, equalizer, StereoWide and more.") { showDsp() }
+            settingsRow(group, "Reset sound settings", "Return every sound control to its default.") { confirmResetSound() }
+        }
+        settingsGroup(content, "Privacy and permissions") { group ->
+            settingsRow(group, "Your music stays on your device",
+                "Auralis has no accounts, ads or tracking, and it never uploads anything.")
+            settingsRow(group, "App permissions", "Manage music and notification access.") {
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", packageName, null)))
+                }
+            }
+        }
+        val versionName = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: ""
+        settingsGroup(content, "About") { group ->
+            settingsRow(group, "Auralis", "Version $versionName · music, in its element.")
+            settingsRow(group, "Open-source notices",
+                "Built with Material Components for Android, licensed under the Apache License 2.0.")
+        }
+
+        scroll.addView(content)
+        page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        return page
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -2655,16 +3030,35 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onPause() {
+        saveSound()
+        super.onPause()
+    }
+
     override fun onStart() {
         super.onStart()
         activityStarted = true
         uiHandler.removeCallbacks(progressTicker)
         uiHandler.post(progressTicker)
+        if (!mediaObserverRegistered) {
+            runCatching {
+                contentResolver.registerContentObserver(
+                    android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, mediaObserver)
+                mediaObserverRegistered = true
+            }
+        }
+        if (libraryFingerprint != Long.MIN_VALUE) scheduleAutoScan()
     }
 
     override fun onStop() {
         activityStarted = false
         uiHandler.removeCallbacks(progressTicker)
+        uiHandler.removeCallbacks(autoScanRunnable)
+        if (mediaObserverRegistered) {
+            runCatching { contentResolver.unregisterContentObserver(mediaObserver) }
+            mediaObserverRegistered = false
+        }
+        saveSound()
         super.onStop()
     }
 
@@ -2704,6 +3098,8 @@ class MainActivity : Activity() {
         private const val DEST_LIBRARY = "library"
         private const val DEST_SOUND = "sound"
         private const val DEST_NOW_PLAYING = "now_playing"
+        private const val DEST_SETTINGS = "settings"
+        private const val KEY_WELCOME_SEEN = "welcome_seen"
         private const val REQUEST_AUDIO = 8201
         private const val REQUEST_LIBRARY_PERMISSION = 8202
         private const val REQUEST_NOTIFICATIONS = 8203
@@ -2725,12 +3121,12 @@ class MainActivity : Activity() {
         private const val LIBRARY_COLLECTION_PAGE_SIZE = 16
         private const val NO_ARTWORK_TAG = "auralis:no-artwork"
         private val FILTER_LABELS = arrayOf(
-            "Low-pass (0)", "High-pass (1)", "Band-pass (2)",
-            "Peaking (3)", "Low shelf (4)", "High shelf (5)"
+            "Low-pass", "High-pass", "Band-pass",
+            "Peaking", "Low shelf", "High shelf"
         )
         private val FILTER_SHORT_NAMES = arrayOf(
             "Low-pass", "High-pass", "Band-pass", "Peaking", "Low shelf", "High shelf"
         )
-        private val CHANNEL_LABELS = arrayOf("Both channels (0)", "Left channel (1)", "Right channel (2)")
+        private val CHANNEL_LABELS = arrayOf("Both channels", "Left channel", "Right channel")
     }
 }
