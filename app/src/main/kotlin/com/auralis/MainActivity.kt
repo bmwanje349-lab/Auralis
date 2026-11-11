@@ -2149,27 +2149,190 @@ class MainActivity : Activity() {
             return
         }
 
-        val labels = candidates.map { it.title + "  ·  " + it.artist }.toTypedArray()
-        val selected = BooleanArray(candidates.size)
-        val dialogRef = arrayOfNulls<AlertDialog>(1)
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Add songs")
-            .setMessage("Choose one or more songs for " + playlistName + ".")
-            .setMultiChoiceItems(labels, selected) { _, which, isChecked ->
-                selected[which] = isChecked
-                dialogRef[0]?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = selected.any { it }
+        // This search field belongs only to the playlist picker. It never changes
+        // currentSearch or the separate Library/Search destination.
+        val selectedIds = linkedSetOf<Long>()
+        var visibleTracks = candidates
+        var addButton: Button? = null
+
+        val pickerContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+        }
+
+        val searchWrap = roundedCard(cSurface, 16).apply {
+            strokeColor = cBorder
+            strokeWidth = dp(1)
+        }
+        val searchRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), 0, dp(14), 0)
+        }
+        val searchIcon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_search)
+            imageTintList = ColorStateList.valueOf(cMuted)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            contentDescription = "Search songs in this picker"
+        }
+        searchRow.addView(searchIcon, LinearLayout.LayoutParams(dp(20), dp(20)).apply {
+            marginEnd = dp(10)
+        })
+        val pickerSearch = EditText(this).apply {
+            hint = "Search songs by title, artist or album"
+            setSingleLine(true)
+            textSize = 14f
+            setTextColor(cText)
+            setHintTextColor(cMuted)
+            background = null
+            setPadding(0, dp(12), 0, dp(12))
+            inputType = InputType.TYPE_CLASS_TEXT
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+        }
+        searchRow.addView(pickerSearch, LinearLayout.LayoutParams(0, dp(52), 1f))
+        searchWrap.addView(searchRow)
+        pickerContent.addView(searchWrap, matchWrap().apply { bottomMargin = dp(10) })
+
+        val selectionSummary = uiText("", 12f, cMuted).apply {
+            setPadding(dp(2), dp(2), dp(2), dp(10))
+        }
+        pickerContent.addView(selectionSummary, matchWrap())
+
+        val songList = ListView(this).apply {
+            divider = GradientDrawable().apply { setColor(cBorder); setSize(1, dp(1)) }
+            dividerHeight = dp(1)
+            selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+            cacheColorHint = Color.TRANSPARENT
+            setBackgroundColor(Color.TRANSPARENT)
+            isFastScrollEnabled = true
+            choiceMode = ListView.CHOICE_MODE_NONE
+        }
+
+        data class SongChoiceHolder(
+            val checkBox: CheckBox,
+            val title: TextView,
+            val subtitle: TextView,
+            var trackId: Long
+        )
+
+        val songAdapter = object : BaseAdapter() {
+            override fun getCount(): Int = visibleTracks.size
+            override fun getItem(position: Int): MusicTrack = visibleTracks[position]
+            override fun getItemId(position: Int): Long = getItem(position).id
+            override fun hasStableIds(): Boolean = true
+
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val row: LinearLayout
+                val holder: SongChoiceHolder
+                if (convertView == null) {
+                    row = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        minimumHeight = dp(68)
+                        setPadding(dp(2), dp(7), dp(4), dp(7))
+                    }
+                    val checkBox = CheckBox(this@MainActivity).apply {
+                        buttonTintList = ColorStateList.valueOf(cAccent)
+                        contentDescription = "Select song"
+                        setPadding(dp(4), 0, dp(12), 0)
+                    }
+                    row.addView(checkBox, LinearLayout.LayoutParams(dp(52), dp(52)))
+                    val copy = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER_VERTICAL
+                    }
+                    val title = uiText("", 14.5f, cText, true).apply { maxLines = 1 }
+                    val subtitle = uiText("", 12f, cMuted).apply {
+                        maxLines = 1
+                        setPadding(0, dp(4), 0, 0)
+                    }
+                    copy.addView(title, matchWrap())
+                    copy.addView(subtitle, matchWrap())
+                    row.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    holder = SongChoiceHolder(checkBox, title, subtitle, -1L)
+                    row.tag = holder
+                    row.isClickable = true
+                    row.isFocusable = true
+                } else {
+                    row = convertView as LinearLayout
+                    holder = row.tag as SongChoiceHolder
+                }
+
+                val track = getItem(position)
+                holder.trackId = track.id
+                holder.title.text = track.title
+                holder.subtitle.text = track.artist + "  ·  " + track.album
+                holder.checkBox.contentDescription = "Select " + track.title
+                holder.checkBox.setOnCheckedChangeListener(null)
+                holder.checkBox.isChecked = track.id in selectedIds
+                holder.checkBox.setOnCheckedChangeListener { _, checked ->
+                    if (checked) selectedIds.add(track.id) else selectedIds.remove(track.id)
+                    updateSelectionSummary()
+                }
+                row.setOnClickListener { holder.checkBox.toggle() }
+                return row
             }
+        }
+        songList.adapter = songAdapter
+
+        fun refreshSongPicker() {
+            val query = pickerSearch.text?.toString()?.trim().orEmpty()
+            visibleTracks = if (query.isBlank()) candidates else candidates.filter { track ->
+                track.title.contains(query, ignoreCase = true) ||
+                    track.artist.contains(query, ignoreCase = true) ||
+                    track.album.contains(query, ignoreCase = true)
+            }
+            songAdapter.notifyDataSetChanged()
+            updateSelectionSummary()
+        }
+
+        fun updateButtonState() {
+            addButton?.isEnabled = selectedIds.isNotEmpty()
+            addButton?.text = if (selectedIds.isEmpty()) "Add selected" else "Add selected (" + selectedIds.size + ")"
+        }
+
+        fun updateSummary() {
+            val noun = if (visibleTracks.size == 1) "song" else "songs"
+            selectionSummary.text = visibleTracks.size.toString() + " " + noun + " shown  ·  " +
+                selectedIds.size + " selected"
+            updateButtonState()
+        }
+
+        // Local helper keeps the picker state separate from the main library query.
+        fun updateSelectionSummary() = updateSummary()
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            clipToPadding = false
+            addView(songList, ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        pickerContent.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(340)
+        ))
+
+        pickerSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                refreshSongPicker()
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Add songs to " + playlistName)
+            .setView(pickerContent)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Add selected", null)
             .create()
-        dialogRef[0] = dialog
 
         dialog.setOnShowListener {
-            val addButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-            addButton.isEnabled = false
-            addButton.setOnClickListener {
-                val addedCount = candidates.indices.count { index ->
-                    selected[index] && playlistStore.addToPlaylist(playlistName, candidates[index].id)
+            addButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            updateSelectionSummary()
+            addButton?.setOnClickListener {
+                val addedCount = candidates.count { track ->
+                    track.id in selectedIds && playlistStore.addToPlaylist(playlistName, track.id)
                 }
                 dialog.dismiss()
                 if (addedCount > 0) {
@@ -2181,6 +2344,7 @@ class MainActivity : Activity() {
                 }
             }
         }
+        refreshSongPicker()
         dialog.show()
     }
 
