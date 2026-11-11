@@ -2976,6 +2976,11 @@ class MainActivity : Activity() {
             }
             settingsRow(group, "Open an audio file", "Play a single file from anywhere on your phone.") { chooseAudio() }
         }
+        settingsGroup(content, "Playback") { group ->
+            settingsRow(group, "Fades & gapless", "Automatic and manual transitions, preload and track-end timing.") {
+                showTransitionSettingsDialog()
+            }
+        }
         settingsGroup(content, "Sound") { group ->
             settingsRow(group, "Open Sound Studio", "Presets, equalizer, StereoWide and more.") { showDsp() }
             settingsRow(group, "Reset sound settings", "Return every sound control to its default.") { confirmResetSound() }
@@ -3000,6 +3005,134 @@ class MainActivity : Activity() {
         scroll.addView(content)
         page.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         return page
+    }
+
+    private fun showTransitionSettingsDialog() {
+        var settings = playback?.getTransitionSettings() ?: PowerampTransitionSettings.read(this)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(12), dp(22), dp(18))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            addView(body)
+        }
+
+        fun heading(text: String) {
+            body.addView(uiText(text.uppercase(), 10f, cAccent, true).apply {
+                letterSpacing = 0.12f
+                setPadding(0, dp(16), 0, dp(7))
+            }, matchWrap())
+        }
+
+        fun choice(title: String, options: Array<String>, selected: Int, changed: (Int) -> Unit) {
+            body.addView(uiText(title, 14f, cText, true).apply { setPadding(0, dp(8), 0, dp(5)) }, matchWrap())
+            val spinner = Spinner(this)
+            spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, options).also {
+                it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            }
+            spinner.setSelection(selected.coerceIn(options.indices), false)
+            spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    changed(position)
+                }
+            }
+            body.addView(spinner, matchWrap().apply { bottomMargin = dp(6) })
+        }
+
+        fun toggle(title: String, detail: String, checked: Boolean, changed: (Boolean) -> Unit) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(7), 0, dp(7))
+            }
+            val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            copy.addView(uiText(title, 14f, cText, true))
+            copy.addView(uiText(detail, 11f, cMuted).apply { setPadding(0, dp(3), 0, 0) })
+            row.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val control = MaterialSwitch(this).apply {
+                showText = false
+                isChecked = checked
+                setOnCheckedChangeListener { _, value -> changed(value) }
+            }
+            row.addView(control)
+            body.addView(row, matchWrap())
+        }
+
+        fun slider(title: String, value: Int, min: Int, max: Int, step: Int, changed: (Int) -> Unit) {
+            val label = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            label.addView(uiText(title, 13f, cText, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val current = uiText("${value} ms", 12f, cAccent, true)
+            label.addView(current)
+            body.addView(label, matchWrap().apply { topMargin = dp(12) })
+            val control = Slider(this).apply {
+                valueFrom = min.toFloat()
+                valueTo = max.toFloat()
+                stepSize = step.toFloat()
+                this.value = value.coerceIn(min, max).toFloat()
+                addOnChangeListener { _, next, _ ->
+                    val ms = next.toInt()
+                    current.text = "$ms ms"
+                    changed(ms)
+                }
+            }
+            body.addView(control, matchWrap().apply { bottomMargin = dp(2) })
+        }
+
+        heading("Track changes")
+        choice(
+            "When a song ends automatically",
+            arrayOf("No fading", "Non-gapless / CUE", "All songs", "Shuffled songs"),
+            settings.autoAdvanceFading
+        ) { settings = settings.copy(autoAdvanceFading = it) }
+        choice(
+            "When Next / Previous is pressed",
+            arrayOf("No fading", "Short crossfade", "Crossfade"),
+            settings.manualAdvanceFading
+        ) { settings = settings.copy(manualAdvanceFading = it) }
+        slider("Crossfade length", settings.crossfadeLengthMs, 100, 15_000, 50) {
+            settings = settings.copy(crossfadeLengthMs = it)
+        }
+        slider("Short manual crossfade", settings.shortManualCrossfadeMs, 10, 1_000, 10) {
+            settings = settings.copy(shortManualCrossfadeMs = it)
+        }
+
+        heading("Gapless playback")
+        slider("Preload gapless tracks", settings.gaplessPreloadMs, 0, 5_000, 100) {
+            settings = settings.copy(gaplessPreloadMs = it)
+        }
+        slider("Silence between tracks", settings.trackEndSilenceMs, 0, 5_000, 100) {
+            settings = settings.copy(trackEndSilenceMs = it)
+        }
+
+        heading("Playback controls")
+        toggle("Fade on play / pause / stop", "Smooths starting, pausing and stopping.", settings.fadePlayPause) {
+            settings = settings.copy(fadePlayPause = it)
+        }
+        slider("Play / pause / stop fade", settings.shortFadeMs, 10, 1_000, 1) {
+            settings = settings.copy(shortFadeMs = it)
+        }
+        toggle("Fade when seeking", "Smooths the audio around a seek.", settings.fadeSeek) {
+            settings = settings.copy(fadeSeek = it)
+        }
+        slider("Seek fade", settings.seekFadeMs, 10, 500, 1) {
+            settings = settings.copy(seekFadeMs = it)
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Fades & gapless")
+            .setView(scroll)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                settings = settings.normalized()
+                playback?.setTransitionSettings(settings) ?: settings.write(this)
+                Toast.makeText(this, "Transition settings saved", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

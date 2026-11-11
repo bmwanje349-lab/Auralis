@@ -664,7 +664,10 @@ void PowerampReverb::process(float* x, std::size_t frames) noexcept {
     }
 }
 
-AuralisDsp::AuralisDsp(int sampleRate) : sampleRate_(std::max(1, sampleRate)), reverb_(sampleRate_) {}
+AuralisDsp::AuralisDsp(int sampleRate) : sampleRate_(std::max(1, sampleRate)), reverb_(sampleRate_) {
+    bassBoost_.prepare(sampleRate_);
+}
+void AuralisDsp::setBassBoost(bool enabled, double amount) noexcept { bassBoost_.configure(enabled, amount); }
 void AuralisDsp::setStereoWide(bool enabled, double percent) noexcept { stereoWide_.configure(enabled, percent); }
 void AuralisDsp::setBalance(bool enabled, double normalized) noexcept { balance_.configure(enabled, normalized); }
 void AuralisDsp::setMono(bool enabled) noexcept { mono_.configure(enabled); }
@@ -707,6 +710,9 @@ void AuralisDsp::process(float* x, std::size_t frames) noexcept {
             if (band.channel != 1) x[2 * i + 1] = static_cast<float>(band.right.process(x[2 * i + 1], band.coefficients));
         }
     }
+    // Auralis Bass Boost sits after the equalizer, ahead of reverb and the stereo stages, so the
+    // reverb tail is not boosted and the limiter below still has the last word.
+    bassBoost_.process(x, frames);
     // Poweramp Reverb is a separate upstream DSP plug-in callback, before the
     // built-in DSPI chain; StereoWide remains independent and follows it.
     reverb_.process(x, frames);
@@ -810,6 +816,9 @@ void AudioPipeline::setMasterGainDb(double db) noexcept {
     ControlCommand c{}; c.kind = 10; c.d0 = std::clamp(db, -30.0, 30.0);
     (void)publish(c);
 }
+void AudioPipeline::setBassBoost(bool enabled, double amount) noexcept {
+    ControlCommand c{}; c.kind = 11; c.b0 = enabled; c.d0 = amount; (void)publish(c);
+}
 void AudioPipeline::applyPendingControls() noexcept {
     for (;;) {
         const std::uint32_t tail = controlTail_.load(std::memory_order_relaxed);
@@ -833,6 +842,8 @@ void AudioPipeline::applyPendingControls() noexcept {
             dsp_.setReplayGainMetadata(metadata);
         } else if (c.kind == 10) {
             dsp_.setMasterGainDb(c.d0);
+        } else if (c.kind == 11) {
+            dsp_.setBassBoost(c.b0, c.d0);
         }
     }
 }

@@ -3,6 +3,8 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def useTermuxPrebuiltNative = System.getenv('AURALIS_PREBUILT_NATIVE') == '1'
+
 dependencies {
     implementation 'com.google.android.material:material:1.12.0'
 }
@@ -10,7 +12,10 @@ dependencies {
 android {
     namespace 'com.auralis'
     compileSdk 35
-    ndkVersion '27.2.12479018'
+    buildToolsVersion '35.0.0'
+    if (!useTermuxPrebuiltNative) {
+        ndkVersion '27.2.12479018'
+    }
 
     defaultConfig {
         applicationId 'com.auralis'
@@ -18,9 +23,11 @@ android {
         targetSdk 35
         versionCode 14
         versionName '1.4.0'
-        externalNativeBuild {
-            cmake {
-                cppFlags '-std=c++17 -O3 -Wall -Wextra'
+        if (!useTermuxPrebuiltNative) {
+            externalNativeBuild {
+                cmake {
+                    cppFlags '-std=c++17 -O3 -Wall -Wextra'
+                }
             }
         }
     }
@@ -57,10 +64,18 @@ android {
         jvmTarget = '17'
     }
 
-    externalNativeBuild {
-        cmake {
-            path file('src/main/cpp/CMakeLists.txt')
-            version '3.22.1'
+    if (!useTermuxPrebuiltNative) {
+        externalNativeBuild {
+            cmake {
+                path file('src/main/cpp/CMakeLists.txt')
+                version '3.22.1'
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs += ['src/main/jniLibs']
         }
     }
 }
