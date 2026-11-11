@@ -2208,11 +2208,19 @@ class MainActivity : Activity() {
             choiceMode = ListView.CHOICE_MODE_NONE
         }
 
+        fun updateSelectionSummary() {
+            val noun = if (visibleTracks.size == 1) "song" else "songs"
+            selectionSummary.text = visibleTracks.size.toString() + " " + noun + " shown  ·  " +
+                selectedIds.size + " selected"
+            addButton?.isEnabled = selectedIds.isNotEmpty()
+            addButton?.text = if (selectedIds.isEmpty()) "Add selected"
+                else "Add selected (" + selectedIds.size + ")"
+        }
+
         data class SongChoiceHolder(
             val checkBox: CheckBox,
             val title: TextView,
-            val subtitle: TextView,
-            var trackId: Long
+            val subtitle: TextView
         )
 
         val songAdapter = object : BaseAdapter() {
@@ -2249,7 +2257,7 @@ class MainActivity : Activity() {
                     copy.addView(title, matchWrap())
                     copy.addView(subtitle, matchWrap())
                     row.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    holder = SongChoiceHolder(checkBox, title, subtitle, -1L)
+                    holder = SongChoiceHolder(checkBox, title, subtitle)
                     row.tag = holder
                     row.isClickable = true
                     row.isFocusable = true
@@ -2259,7 +2267,6 @@ class MainActivity : Activity() {
                 }
 
                 val track = getItem(position)
-                holder.trackId = track.id
                 holder.title.text = track.title
                 holder.subtitle.text = track.artist + "  ·  " + track.album
                 holder.checkBox.contentDescription = "Select " + track.title
@@ -2286,29 +2293,8 @@ class MainActivity : Activity() {
             updateSelectionSummary()
         }
 
-        fun updateButtonState() {
-            addButton?.isEnabled = selectedIds.isNotEmpty()
-            addButton?.text = if (selectedIds.isEmpty()) "Add selected" else "Add selected (" + selectedIds.size + ")"
-        }
-
-        fun updateSummary() {
-            val noun = if (visibleTracks.size == 1) "song" else "songs"
-            selectionSummary.text = visibleTracks.size.toString() + " " + noun + " shown  ·  " +
-                selectedIds.size + " selected"
-            updateButtonState()
-        }
-
-        // Local helper keeps the picker state separate from the main library query.
-        fun updateSelectionSummary() = updateSummary()
-
-        val scroll = ScrollView(this).apply {
-            isFillViewport = false
-            clipToPadding = false
-            addView(songList, ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
-        }
-        pickerContent.addView(scroll, LinearLayout.LayoutParams(
+        // ListView owns its scrolling so rows are virtualized even for large libraries.
+        pickerContent.addView(songList, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(340)
         ))
 
