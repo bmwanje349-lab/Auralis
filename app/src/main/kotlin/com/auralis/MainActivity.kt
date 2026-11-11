@@ -813,7 +813,7 @@ class MainActivity : Activity() {
                 "Equalizer" -> R.drawable.ic_equalizer
                 "Volume levelling" -> R.drawable.ic_music_note
                 "Reverb" -> R.drawable.ic_album
-                "Dynamics" -> R.drawable.ic_tune
+                "Dynamic Limiter" -> R.drawable.ic_tune
                 else -> R.drawable.ic_tune
             })
             imageTintList = ColorStateList.valueOf(cAccent)
@@ -1140,6 +1140,27 @@ class MainActivity : Activity() {
             }
         }
 
+        dspCard(content, "Dynamic Limiter", "Keep peaks controlled and playback clean.") { body ->
+            limiterToggle = dspSwitch(
+                body, "Peak limiter", "Help prevent sudden peaks from clipping."
+            ) { enabled ->
+                playback?.setLimiter(enabled, limiterPath)
+            }
+            addDspDivider(body)
+            body.addView(uiText("PROTECTION STYLE", 10f, cMuted, true), matchWrap())
+            limiterPathButton = materialAction(limiterPathText(), false, true).apply {
+                textSize = 13f
+                setOnClickListener {
+                    limiterPath = if (limiterPath == 0) 1 else 0
+                    text = limiterPathText()
+                    playback?.setLimiter(limiterToggle.isChecked, limiterPath)
+                }
+            }
+            body.addView(limiterPathButton, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
+            ).apply { topMargin = dp(8) })
+        }
+
         dspCard(content, "Volume levelling", "Keep songs at a similar loudness, so you are not reaching for the volume.") { body ->
             replayModeButton = materialAction(replayModeText(), false, true).apply {
                 textSize = 13f
@@ -1211,26 +1232,7 @@ class MainActivity : Activity() {
             }
         }
 
-        dspCard(content, "Dynamics", "Keep peaks controlled and playback clean.") { body ->
-            limiterToggle = dspSwitch(
-                body, "Peak limiter", "Help prevent sudden peaks from clipping."
-            ) { enabled ->
-                playback?.setLimiter(enabled, limiterPath)
-            }
-            addDspDivider(body)
-            body.addView(uiText("PROTECTION STYLE", 10f, cMuted, true), matchWrap())
-            limiterPathButton = materialAction(limiterPathText(), false, true).apply {
-                textSize = 13f
-                setOnClickListener {
-                    limiterPath = if (limiterPath == 0) 1 else 0
-                    text = limiterPathText()
-                    playback?.setLimiter(limiterToggle.isChecked, limiterPath)
-                }
-            }
-            body.addView(limiterPathButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { topMargin = dp(8) })
-        }
+
 
         content.addView(uiText(
             "Your adjustments are applied live while music is playing.",
