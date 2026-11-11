@@ -51,6 +51,10 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null
           set -o pipefail
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Verify Auralis version metadata
+        run: |
+          grep -q "versionCode 14" auralis/app/build.gradle
+          grep -q "versionName '1.4.0'" auralis/app/build.gradle
       - name: Install Gradle distribution
         run: |
           curl --retry 3 --retry-delay 2 -fsSL https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
@@ -59,3 +63,30 @@ jobs:
         run: |
           java -version
           /tmp/gradle-8.7/bin/gradle --no-daemon -p auralis assembleDebug testDebugUnitTest
+
+      - name: Verify APK and record build identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=auralis/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          sha256sum "$APK" | tee auralis/AURALIS-SHA256SUMS.txt
+          cat > auralis/AURALIS-BUILD-INFO.txt <<INFO
+          Auralis 1.4.0 sound presets, saved sound settings, settings page
+          Source: ${GITHUB_SHA}
+          Application ID: com.auralis
+          Version: 1.4.0 (versionCode 14)
+          Variant: debug
+          Build task: assembleDebug
+          Test task: testDebugUnitTest
+          INFO
+      - name: Upload verified debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: auralis-1.4.0-debug-${{ github.sha }}
+          path: |
+            auralis/app/build/outputs/apk/debug/app-debug.apk
+            auralis/AURALIS-BUILD-INFO.txt
+            auralis/AURALIS-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

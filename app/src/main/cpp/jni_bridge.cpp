@@ -89,6 +89,12 @@ Java_com_auralis_NativeAudioEngine_nativeSetReplayGain(JNIEnv*, jclass, jlong ha
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_auralis_NativeAudioEngine_nativeSetMasterGainDb(JNIEnv*, jclass, jlong handle, jdouble db) {
+    auto* p = reinterpret_cast<AudioPipeline*>(handle);
+    if (p) p->setMasterGainDb(db);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_auralis_NativeAudioEngine_nativeSetReplayGainMetadata(JNIEnv*, jclass, jlong handle,
                                                                  jboolean albumAvailable,
                                                                  jdouble albumGainDb,

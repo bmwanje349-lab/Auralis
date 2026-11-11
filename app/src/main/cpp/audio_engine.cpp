@@ -805,6 +805,11 @@ void AudioPipeline::setReplayGainMetadata(const ReplayGainMetadata& metadata) no
     c.d2 = metadata.trackGainDb; c.d3 = metadata.trackPeakLinear;
     (void)publish(c);
 }
+void AudioPipeline::setMasterGainDb(double db) noexcept {
+    if (!std::isfinite(db)) return;
+    ControlCommand c{}; c.kind = 10; c.d0 = std::clamp(db, -30.0, 30.0);
+    (void)publish(c);
+}
 void AudioPipeline::applyPendingControls() noexcept {
     for (;;) {
         const std::uint32_t tail = controlTail_.load(std::memory_order_relaxed);
@@ -826,6 +831,8 @@ void AudioPipeline::applyPendingControls() noexcept {
             metadata.albumGainDb = c.d0; metadata.albumPeakLinear = c.d1;
             metadata.trackGainDb = c.d2; metadata.trackPeakLinear = c.d3;
             dsp_.setReplayGainMetadata(metadata);
+        } else if (c.kind == 10) {
+            dsp_.setMasterGainDb(c.d0);
         }
     }
 }

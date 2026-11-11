@@ -326,6 +326,7 @@ public:
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
     void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
     void setReplayGainMetadata(const ReplayGainMetadata& metadata) noexcept;
+    void setMasterGainDb(double db) noexcept;
 private:
     struct ControlCommand {
         int kind=0, i0=0, i1=0, i2=0, i3=0;

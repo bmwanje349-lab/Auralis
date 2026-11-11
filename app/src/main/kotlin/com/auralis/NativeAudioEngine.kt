@@ -36,6 +36,7 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
         nativeSetEqBand(handle, index, enabled, type, frequencyHz, q, gainDb, channel)
     fun setReplayGain(type: Int, source: Int, defaultGainMb: Int, preampMb: Int) =
         nativeSetReplayGain(handle, type, source, defaultGainMb, preampMb)
+    fun setMasterGainDb(db: Double) = nativeSetMasterGainDb(handle, db.coerceIn(-30.0, 30.0))
     fun setReplayGainMetadata(tags: ReplayGainTags) = nativeSetReplayGainMetadata(
         handle, tags.albumAvailable, tags.albumGainDb ?: 0.0, tags.albumPeakLinear ?: 0.0,
         tags.trackAvailable, tags.trackGainDb ?: 0.0, tags.trackPeakLinear ?: 0.0
@@ -74,6 +75,7 @@ internal class NativeAudioEngine(sampleRate: Int) : AutoCloseable {
                                                         frequencyHz: Int, q: Double, gainDb: Double, channel: Int): Boolean
         @JvmStatic private external fun nativeSetReplayGain(handle: Long, type: Int, source: Int,
                                                             defaultGainMb: Int, preampMb: Int)
+        @JvmStatic private external fun nativeSetMasterGainDb(handle: Long, db: Double)
         @JvmStatic private external fun nativeParseReplayGain(bytes: ByteArray, length: Int): DoubleArray?
         @JvmStatic private external fun nativeSetReplayGainMetadata(handle: Long,
             albumAvailable: Boolean, albumGainDb: Double, albumPeakLinear: Double,
