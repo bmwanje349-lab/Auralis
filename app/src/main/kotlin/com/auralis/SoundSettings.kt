@@ -82,7 +82,9 @@ internal class SoundSnapshot(
     val eqOn: Boolean,
     val eqGains: FloatArray,
     val eqPreset: String,
-    val bands: List<ParametricBand>
+    val bands: List<ParametricBand>,
+    val bassOn: Boolean = false,
+    val bassAmount: Int = 65
 )
 
 /** Remembers the listener's sound settings between launches. */
@@ -114,6 +116,8 @@ internal class SoundStore(context: Context) {
         put("eqOn", s.eqOn)
         put("eqGains", JSONArray().also { array -> s.eqGains.forEach { array.put(it.toDouble()) } })
         put("eqPreset", s.eqPreset)
+        put("bassOn", s.bassOn)
+        put("bassAmount", s.bassAmount)
         put("bands", JSONArray().also { array ->
             s.bands.forEach { band ->
                 array.put(JSONObject().apply {
@@ -167,7 +171,9 @@ internal class SoundStore(context: Context) {
                     .coerceIn(-SoundPresets.MAX_GAIN_DB, SoundPresets.MAX_GAIN_DB)
             },
             eqPreset = o.optString("eqPreset", SoundPresets.FLAT),
-            bands = bands
+            bands = bands,
+            bassOn = o.optBoolean("bassOn", false),
+            bassAmount = o.optInt("bassAmount", 65).coerceIn(0, 100)
         )
     }
 

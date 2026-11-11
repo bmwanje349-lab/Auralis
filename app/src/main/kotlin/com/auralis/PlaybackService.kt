@@ -68,6 +68,8 @@ class PlaybackService : Service() {
     @Volatile private var monoEnabled = false
     @Volatile private var limiterEnabled = false
     @Volatile private var limiterPath = 0
+    @Volatile private var bassBoostEnabled = false
+    @Volatile private var bassBoostAmount = 0.65
     @Volatile private var reverbEnabled = false
     @Volatile private var replayGainType = 0          // 0 None, 1 Apply, 2 Apply Peak
     @Volatile private var replayGainSource = 0        // 0 Album, 1 Track
@@ -441,6 +443,14 @@ class PlaybackService : Service() {
         }
     }
 
+    fun setBassBoost(enabled: Boolean, amount: Double) {
+        synchronized(configLock) {
+            bassBoostEnabled = enabled
+            bassBoostAmount = amount.coerceIn(0.0, 1.0)
+            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount)
+        }
+    }
+
     fun setReverbEnabled(enabled: Boolean) {
         synchronized(configLock) {
             reverbEnabled = enabled
@@ -526,6 +536,7 @@ class PlaybackService : Service() {
                 nativeEngine.setBalance(balanceEnabled, balanceNormalized)
                 nativeEngine.setMono(monoEnabled)
                 nativeEngine.setLimiter(limiterEnabled, limiterPath)
+                nativeEngine.setBassBoost(bassBoostEnabled, bassBoostAmount)
                 reverbParameters.forEachIndexed { index, value -> nativeEngine.setReverbParameter(index, value) }
                 nativeEngine.setReverbEnabled(reverbEnabled)
                 nativeEngine.setReplayGain(replayGainType, replayGainSource, replayGainDefaultMb, 0)

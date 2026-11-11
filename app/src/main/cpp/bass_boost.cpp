@@ -13,12 +13,22 @@ constexpr double kButterworthQ = 0.70710678118654752;
 // The boosted band: subsonic cut, then a low-pass that sets how high the boost reaches.
 constexpr double kSubsonicHz = 30.0;
 constexpr double kBassCeilingHz = 110.0;
+// Corner and slope of the low shelf that carries the boost (half the boost is reached at the corner).
+constexpr double kShelfHz = 110.0;
+constexpr double kShelfQ = 0.75;
 // Harmonics of the bass band are kept between these two corners.
 constexpr double kHarmonicLowHz = 140.0;
 constexpr double kHarmonicHighHz = 450.0;
 // Small high-shelf lift that keeps the added weight from sounding dull.
 constexpr double kAirHz = 8000.0;
 constexpr double kAirMaxDb = 2.5;
+// JBL-style "V" voicing: a dip in the boxy region and a lift in the vocal presence region.
+constexpr double kTuckHz = 350.0;
+constexpr double kTuckQ = 0.9;
+constexpr double kTuckMaxDb = -2.0;
+constexpr double kPresenceHz = 3000.0;
+constexpr double kPresenceQ = 0.9;
+constexpr double kPresenceMaxDb = 1.5;
 
 // The boost eases off between these bass-band levels (dBFS) as the bass gets louder.
 constexpr double kQuietDb = -24.0;
@@ -87,6 +97,33 @@ void BassBoost::Biquad::highShelf(double fs, double hz, double q, double gainDb)
     a2 = ((A + 1.0) - (A - 1.0) * cw - beta) / a0;
 }
 
+void BassBoost::Biquad::lowShelf(double fs, double hz, double q, double gainDb) noexcept {
+    const double w0 = 2.0 * kPi * std::min(hz, fs * 0.45) / fs;
+    const double cw = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    const double A = std::pow(10.0, gainDb / 40.0);
+    const double beta = 2.0 * std::sqrt(A) * alpha;
+    const double a0 = (A + 1.0) + (A - 1.0) * cw + beta;
+    b0 = (A * ((A + 1.0) - (A - 1.0) * cw + beta)) / a0;
+    b1 = (2.0 * A * ((A - 1.0) - (A + 1.0) * cw)) / a0;
+    b2 = (A * ((A + 1.0) - (A - 1.0) * cw - beta)) / a0;
+    a1 = (-2.0 * ((A - 1.0) + (A + 1.0) * cw)) / a0;
+    a2 = ((A + 1.0) + (A - 1.0) * cw - beta) / a0;
+}
+
+void BassBoost::Biquad::peaking(double fs, double hz, double q, double gainDb) noexcept {
+    const double w0 = 2.0 * kPi * std::min(hz, fs * 0.45) / fs;
+    const double cw = std::cos(w0);
+    const double alpha = std::sin(w0) / (2.0 * q);
+    const double A = std::pow(10.0, gainDb / 40.0);
+    const double a0 = 1.0 + alpha / A;
+    b0 = (1.0 + alpha * A) / a0;
+    b1 = (-2.0 * cw) / a0;
+    b2 = (1.0 - alpha * A) / a0;
+    a1 = (-2.0 * cw) / a0;
+    a2 = (1.0 - alpha / A) / a0;
+}
+
 void BassBoost::prepare(int sampleRate) noexcept {
     sampleRate_ = static_cast<double>(std::max(8000, sampleRate));
     smoothCoeff_ = timeConstantCoeff(0.030, sampleRate_);
@@ -94,10 +131,11 @@ void BassBoost::prepare(int sampleRate) noexcept {
     releaseCoeff_ = timeConstantCoeff(0.120, sampleRate_);
     gainCoeff_ = timeConstantCoeff(0.050, sampleRate_);
     subsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
+    liftSubsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
     lowBand_.lowPass(sampleRate_, kBassCeilingHz, kButterworthQ);
     harmonicHigh_.highPass(sampleRate_, kHarmonicLowHz, kButterworthQ);
     harmonicLow_.lowPass(sampleRate_, kHarmonicHighHz, kButterworthQ);
-    airAppliedAmount_ = -1.0;
+    voicingAppliedAmount_ = -1.0;
     resetState();
 }
 
@@ -108,11 +146,18 @@ void BassBoost::configure(bool enabled, double amount) noexcept {
 
 void BassBoost::resetState() noexcept {
     subsonic_.reset();
+    liftSubsonic_.reset();
+    shelf_.reset();
+    shelf_.lowShelf(sampleRate_, kShelfHz, kShelfQ, 0.0);
     lowBand_.reset();
     harmonicHigh_.reset();
     harmonicLow_.reset();
     airLeft_.reset();
     airRight_.reset();
+    tuckLeft_.reset();
+    tuckRight_.reset();
+    presenceLeft_.reset();
+    presenceRight_.reset();
     amount_ = amountTarget_;
     mix_ = 0.0;
     env_ = 0.0;
@@ -122,17 +167,16 @@ void BassBoost::resetState() noexcept {
     controlCounter_ = 0;
 }
 
-void BassBoost::updateAirShelf() noexcept {
-    if (std::fabs(amount_ - airAppliedAmount_) < 0.01) return;
-    airAppliedAmount_ = amount_;
-    const double gainDb = kAirMaxDb * amount_;
-    airLeft_.highShelf(sampleRate_, kAirHz, kButterworthQ, gainDb);
-    // Keep the right channel's coefficients identical; only the filter memory differs.
-    airRight_.b0 = airLeft_.b0;
-    airRight_.b1 = airLeft_.b1;
-    airRight_.b2 = airLeft_.b2;
-    airRight_.a1 = airLeft_.a1;
-    airRight_.a2 = airLeft_.a2;
+void BassBoost::updateVoicing() noexcept {
+    if (std::fabs(amount_ - voicingAppliedAmount_) < 0.01) return;
+    voicingAppliedAmount_ = amount_;
+    // Left and right share coefficients; only the filter memory differs.
+    airLeft_.highShelf(sampleRate_, kAirHz, kButterworthQ, kAirMaxDb * amount_);
+    airRight_.copyCoefficients(airLeft_);
+    tuckLeft_.peaking(sampleRate_, kTuckHz, kTuckQ, kTuckMaxDb * amount_);
+    tuckRight_.copyCoefficients(tuckLeft_);
+    presenceLeft_.peaking(sampleRate_, kPresenceHz, kPresenceQ, kPresenceMaxDb * amount_);
+    presenceRight_.copyCoefficients(presenceLeft_);
 }
 
 void BassBoost::updateControl() noexcept {
@@ -142,7 +186,7 @@ void BassBoost::updateControl() noexcept {
     boostDb_ = kMaxBoostDb * amount_ * fraction;
     // The low band is added back on top of the signal, so the extra gain is (g - 1).
     gainTarget_ = std::pow(10.0, boostDb_ / 20.0);
-    updateAirShelf();
+    updateVoicing();
 }
 
 void BassBoost::process(float* x, std::size_t frames) noexcept {
@@ -182,11 +226,14 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         if (++controlCounter_ >= kControlInterval) {
             controlCounter_ = 0;
             updateControl();
+            shelf_.lowShelf(sampleRate_, kShelfHz, kShelfQ, 20.0 * std::log10(gain_));
         }
         gain_ += (gainTarget_ - gain_) * gainCoeff_;
 
-        // 1. Dynamic low boost.
-        const double lift = low * (gain_ - 1.0);
+        // 1. Dynamic low boost: only the shelf's added energy, with inaudible rumble removed. Using a
+        //    shelf (not a filtered copy of the bass band) keeps the boost in phase with the music, so
+        //    it never cancels the low mids above the bass.
+        const double lift = liftSubsonic_.process(shelf_.process(mid) - mid);
 
         // 2. Virtual bass: the bass band is normalised by its own level, shaped by a non-linear
         //    device with both even and odd harmonics, then scaled back to the bass level so the
@@ -197,9 +244,9 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
 
         const double extra = lift + kHarmonicAmount * amount_ * harmonics;
 
-        // 5. Air, blended in with the same smoothing as everything else.
-        const double airL = airLeft_.process(l);
-        const double airR = airRight_.process(r);
+        // 5. JBL voicing (mid dip, presence lift, air), blended in with the same smoothing as everything else.
+        const double airL = airLeft_.process(presenceLeft_.process(tuckLeft_.process(l)));
+        const double airR = airRight_.process(presenceRight_.process(tuckRight_.process(r)));
         const double baseL = l + (airL - l) * mix_;
         const double baseR = r + (airR - r) * mix_;
 

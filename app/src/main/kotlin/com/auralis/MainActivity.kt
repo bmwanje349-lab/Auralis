@@ -112,6 +112,8 @@ class MainActivity : Activity() {
     private lateinit var balanceValue: TextView
     private lateinit var balanceSlider: Slider
     private lateinit var monoToggle: CompoundButton
+    private lateinit var bassToggle: CompoundButton
+    private lateinit var bassSlider: Slider
     private lateinit var limiterToggle: CompoundButton
     private lateinit var limiterPathButton: Button
     private var limiterPath = 0
@@ -1030,6 +1032,28 @@ class MainActivity : Activity() {
                 updateEqCount()
             }
             updateEqPresetUi()
+        }
+
+        dspCard(content, "Bass boost", "Deep, punchy low end that stays clean at high volume.") { body ->
+            bassToggle = dspSwitch(
+                body, "Enable bass boost", "Fuller bass, clearer vocals and a touch of sparkle, tuned like popular consumer speakers."
+            ) { enabled ->
+                playback?.setBassBoost(enabled, bassSlider.value / 100.0)
+            }
+            val (strength, _) = dspSlider(
+                body, "STRENGTH", 65f, 100f, 1f,
+                { value ->
+                    when {
+                        value < 25f -> "${value.toInt()}% · Subtle"
+                        value < 55f -> "${value.toInt()}% · Light"
+                        value < 80f -> "${value.toInt()}% · Punchy"
+                        else -> "${value.toInt()}% · Heavy"
+                    }
+                }
+            ) { value ->
+                playback?.setBassBoost(bassToggle.isChecked, value / 100.0)
+            }
+            bassSlider = strength
         }
 
         dspCard(content, "Output level", "Set the overall level of your music.", initiallyExpanded = true) { body ->
@@ -2696,6 +2720,7 @@ class MainActivity : Activity() {
         playback?.setBalance(balanceToggle.isChecked, (balanceSlider.value - 100f) / 100.0)
         playback?.setMono(monoToggle.isChecked)
         playback?.setLimiter(limiterToggle.isChecked, limiterPath)
+        playback?.setBassBoost(bassToggle.isChecked, bassSlider.value / 100.0)
         applyReplayGain()
         applyGraphicEq()
         eqControls.forEach { c ->
@@ -2806,7 +2831,9 @@ class MainActivity : Activity() {
         eqPreset = eqPresetName,
         bands = eqControls.map { c ->
             ParametricBand(c.type, c.frequency, c.q, (c.gain.value.toInt() - 150) / 10.0, c.channel, c.enabled.isChecked)
-        }
+        },
+        bassOn = bassToggle.isChecked,
+        bassAmount = bassSlider.value.toInt()
     )
 
     private fun saveSound() {
@@ -2822,6 +2849,8 @@ class MainActivity : Activity() {
             balanceSlider.value = saved.balance.toFloat()
             balanceToggle.isChecked = saved.balanceOn
             monoToggle.isChecked = saved.mono
+            bassSlider.value = saved.bassAmount.toFloat()
+            bassToggle.isChecked = saved.bassOn
             saved.reverb.forEachIndexed { i, v -> reverbSliders[i]?.value = v.toFloat() }
             reverbToggle.isChecked = saved.reverbOn
             limiterPath = saved.limiterPath
@@ -2854,6 +2883,8 @@ class MainActivity : Activity() {
         balanceToggle.isChecked = false
         balanceSlider.value = 100f
         monoToggle.isChecked = false
+        bassToggle.isChecked = false
+        bassSlider.value = 65f
         reverbToggle.isChecked = false
         reverbInitial.forEachIndexed { i, v -> reverbSliders[i]?.value = v.toFloat() }
         limiterToggle.isChecked = false

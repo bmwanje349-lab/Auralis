@@ -123,6 +123,31 @@ int main() {
     std::cout << "1 kHz at -20 dBFS, high: " << mids << " dB\n";
     check(std::fabs(mids) < 0.5, "1 kHz is not changed");
 
+    // JBL-style consumer voicing: a dip in the boxy region, a lift in presence and air, and
+    // everything scaling with the strength.
+    {
+        const double tuck = toneGainDb(350.0, 0.1, 1.0);
+        const double presence = toneGainDb(3000.0, 0.1, 1.0);
+        const double air = toneGainDb(10000.0, 0.1, 1.0);
+        const double halfTuck = toneGainDb(350.0, 0.1, 0.5);
+        std::cout << "voicing at full strength: 350 Hz " << tuck << " dB, 3 kHz " << presence
+                  << " dB, 10 kHz " << air << " dB; 350 Hz at half strength " << halfTuck << " dB\n";
+        check(tuck < -1.0 && tuck > -3.5, "voicing dips the boxy 350 Hz region by roughly 1-3 dB");
+        check(presence > 0.8 && presence < 2.5, "voicing lifts vocal presence at 3 kHz by roughly 1-2 dB");
+        check(air > 1.5 && air < 3.5, "voicing adds a little air at 10 kHz");
+        check(halfTuck > tuck && halfTuck < 0.0, "voicing scales with the strength");
+    }
+
+    // The bass lift must hand over cleanly: no hole in the low mids where the boost ends.
+    {
+        double worst = 0.0;
+        for (double hz : {200.0, 250.0, 300.0, 400.0, 500.0, 700.0}) {
+            worst = std::min(worst, toneGainDb(hz, 0.1, 1.0));
+        }
+        std::cout << "deepest dip between 200 Hz and 700 Hz: " << worst << " dB\n";
+        check(worst > -2.6, "no hole in the low mids above the boosted bass");
+    }
+
     // Virtual bass: a pure 60 Hz tone gains harmonics it did not have.
     {
         BassBoost stage;
