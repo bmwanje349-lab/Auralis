@@ -1161,40 +1161,6 @@ class MainActivity : Activity() {
             ).apply { topMargin = dp(8) })
         }
 
-        dspCard(content, "Volume levelling", "Keep songs at a similar loudness, so you are not reaching for the volume.") { body ->
-            replayModeButton = materialAction(replayModeText(), false, true).apply {
-                textSize = 13f
-                setOnClickListener {
-                    replayMode = (replayMode + 1) % 3
-                    text = replayModeText()
-                    applyReplayGain()
-                }
-            }
-            body.addView(uiText("VOLUME LEVELLING", 10f, cMuted, true), matchWrap())
-            body.addView(replayModeButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { topMargin = dp(7); bottomMargin = dp(15) })
-
-            replaySourceButton = materialAction(replaySourceText(), false, true).apply {
-                textSize = 13f
-                setOnClickListener {
-                    replaySource = 1 - replaySource
-                    text = replaySourceText()
-                    applyReplayGain()
-                }
-            }
-            body.addView(uiText("MATCH LEVELS BY", 10f, cMuted, true), matchWrap())
-            body.addView(replaySourceButton, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
-            ).apply { topMargin = dp(7); bottomMargin = dp(13) })
-
-            val (default, _) = dspSlider(
-                body, "LEVEL FOR SONGS WITHOUT LEVEL INFO", 150f, 300f, 1f,
-                { replayDbText(it.toInt()) }
-            ) { _ -> applyReplayGain() }
-            replayDefaultSlider = default
-        }
-
         dspCard(content, "Reverb", "Add a sense of space and room to your music.") { body ->
             reverbToggle = dspSwitch(
                 body, "Enable reverb", "Apply the room and ambience effect."
@@ -1230,6 +1196,42 @@ class MainActivity : Activity() {
                 addReverbControl(5, "Pre-delay mix")
                 addReverbControl(6, "Damping")
             }
+        }
+
+
+
+        dspCard(content, "Volume levelling", "Keep songs at a similar loudness, so you are not reaching for the volume.") { body ->
+            replayModeButton = materialAction(replayModeText(), false, true).apply {
+                textSize = 13f
+                setOnClickListener {
+                    replayMode = (replayMode + 1) % 3
+                    text = replayModeText()
+                    applyReplayGain()
+                }
+            }
+            body.addView(uiText("VOLUME LEVELLING", 10f, cMuted, true), matchWrap())
+            body.addView(replayModeButton, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
+            ).apply { topMargin = dp(7); bottomMargin = dp(15) })
+
+            replaySourceButton = materialAction(replaySourceText(), false, true).apply {
+                textSize = 13f
+                setOnClickListener {
+                    replaySource = 1 - replaySource
+                    text = replaySourceText()
+                    applyReplayGain()
+                }
+            }
+            body.addView(uiText("MATCH LEVELS BY", 10f, cMuted, true), matchWrap())
+            body.addView(replaySourceButton, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)
+            ).apply { topMargin = dp(7); bottomMargin = dp(13) })
+
+            val (default, _) = dspSlider(
+                body, "LEVEL FOR SONGS WITHOUT LEVEL INFO", 150f, 300f, 1f,
+                { replayDbText(it.toInt()) }
+            ) { _ -> applyReplayGain() }
+            replayDefaultSlider = default
         }
 
 
