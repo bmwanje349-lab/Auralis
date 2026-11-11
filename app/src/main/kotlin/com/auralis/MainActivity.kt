@@ -2151,17 +2151,18 @@ class MainActivity : Activity() {
 
         val labels = candidates.map { it.title + "  ·  " + it.artist }.toTypedArray()
         val selected = BooleanArray(candidates.size)
-        lateinit var dialog: AlertDialog
-        dialog = AlertDialog.Builder(this)
+        val dialogRef = arrayOfNulls<AlertDialog>(1)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("Add songs")
             .setMessage("Choose one or more songs for " + playlistName + ".")
             .setMultiChoiceItems(labels, selected) { _, which, isChecked ->
                 selected[which] = isChecked
-                dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = selected.any { it }
+                dialogRef[0]?.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = selected.any { it }
             }
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Add selected", null)
             .create()
+        dialogRef[0] = dialog
 
         dialog.setOnShowListener {
             val addButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
