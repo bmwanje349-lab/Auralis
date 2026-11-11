@@ -525,9 +525,9 @@ class MainActivity : Activity() {
         }
         bottomNavigation.addView(createNavItem(DEST_HOME, "Home", R.drawable.ic_home) { showHome() },
             LinearLayout.LayoutParams(0, dp(66), 1f))
-        bottomNavigation.addView(createNavItem(DEST_SEARCH, "Search", R.drawable.ic_search) { showSearch() },
-            LinearLayout.LayoutParams(0, dp(66), 1f))
         bottomNavigation.addView(createNavItem(DEST_LIBRARY, "Library", R.drawable.ic_library) { showLibrary() },
+            LinearLayout.LayoutParams(0, dp(66), 1f))
+        bottomNavigation.addView(createNavItem(DEST_SEARCH, "Search", R.drawable.ic_search) { showSearch() },
             LinearLayout.LayoutParams(0, dp(66), 1f))
         bottomNavigation.addView(createNavItem(DEST_SOUND, "Sound", R.drawable.ic_tune) { showDsp() },
             LinearLayout.LayoutParams(0, dp(66), 1f))
@@ -1530,6 +1530,14 @@ class MainActivity : Activity() {
             page.addView(back, matchWrap().apply { bottomMargin = dp(5) })
         }
 
+        if (currentLibraryTab == LIBRARY_PLAYLISTS && currentPlaylist != null &&
+            currentPlaylist != PlaylistStore.FAVOURITES_NAME) {
+            val playlistName = currentPlaylist.orEmpty()
+            page.addView(materialAction("+ Add songs to playlist", true, true).apply {
+                setOnClickListener { showAddSongsToPlaylistDialog(playlistName) }
+            }, matchWrap().apply { bottomMargin = dp(8) })
+        }
+
         val sortRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val count = uiText("", 12f, cMuted)
         libraryCountLabel = count
@@ -2094,13 +2102,15 @@ class MainActivity : Activity() {
         }.show()
     }
 
-    private fun showCreatePlaylistDialog() {
+    private fun showCreatePlaylistDialog(onCreated: ((String) -> Unit)? = null) {
         val input = EditText(this).apply { hint = "Playlist name"; setSingleLine(true) }
         AlertDialog.Builder(this).setTitle("New playlist").setView(input)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Create") { _, _ ->
-                if (playlistStore.createPlaylist(input.text.toString())) {
-                    currentPlaylist = input.text.toString().trim()
+                val name = input.text.toString().trim().take(48)
+                if (playlistStore.createPlaylist(name)) {
+                    onCreated?.invoke(name)
+                    currentPlaylist = name
                     currentLibraryTab = LIBRARY_PLAYLISTS
                     showLibrary(refreshContent = true)
                 } else Toast.makeText(this, "Enter a new playlist name", Toast.LENGTH_SHORT).show()
@@ -2109,11 +2119,68 @@ class MainActivity : Activity() {
 
     private fun showAddToPlaylistDialog(track: MusicTrack) {
         val names = playlistStore.playlists()
-        if (names.isEmpty()) { showCreatePlaylistDialog(); return }
+        if (names.isEmpty()) {
+            showCreatePlaylistDialog { newName ->
+                val added = playlistStore.addToPlaylist(newName, track.id)
+                Toast.makeText(this, if (added) "Added to " + newName else "Already in " + newName,
+                    Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         AlertDialog.Builder(this).setTitle("Add to playlist").setItems(names.toTypedArray()) { _, which ->
             val added = playlistStore.addToPlaylist(names[which], track.id)
             Toast.makeText(this, if (added) "Added to ${names[which]}" else "Already in ${names[which]}", Toast.LENGTH_SHORT).show()
-        }.setNeutralButton("New playlist") { _, _ -> showCreatePlaylistDialog() }.show()
+        }.setNeutralButton("New playlist") { _, _ ->
+            showCreatePlaylistDialog { newName ->
+                val added = playlistStore.addToPlaylist(newName, track.id)
+                Toast.makeText(this, if (added) "Added to " + newName else "Already in " + newName,
+                    Toast.LENGTH_SHORT).show()
+            }
+        }.show()
+    }
+
+    private fun showAddSongsToPlaylistDialog(playlistName: String) {
+        val existingIds = playlistStore.trackIds(playlistName).toHashSet()
+        val candidates = librarySnapshot.filter { it.id !in existingIds }
+        if (candidates.isEmpty()) {
+            val message = if (librarySnapshot.isEmpty()) "Your library has no songs yet."
+                else "Every song in your library is already in this playlist."
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val labels = candidates.map { it.title + "  ·  " + it.artist }.toTypedArray()
+        val selected = BooleanArray(candidates.size)
+        lateinit var dialog: AlertDialog
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Add songs")
+            .setMessage("Choose one or more songs for " + playlistName + ".")
+            .setMultiChoiceItems(labels, selected) { _, which, isChecked ->
+                selected[which] = isChecked
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.isEnabled = selected.any { it }
+            }
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Add selected", null)
+            .create()
+
+        dialog.setOnShowListener {
+            val addButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            addButton.isEnabled = false
+            addButton.setOnClickListener {
+                val addedCount = candidates.indices.count { index ->
+                    selected[index] && playlistStore.addToPlaylist(playlistName, candidates[index].id)
+                }
+                dialog.dismiss()
+                if (addedCount > 0) {
+                    homeStale = true
+                    renderLibraryItems()
+                    val noun = if (addedCount == 1) " song" else " songs"
+                    Toast.makeText(this, "Added " + addedCount + noun + " to " + playlistName,
+                        Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun showNowPlaying() {
