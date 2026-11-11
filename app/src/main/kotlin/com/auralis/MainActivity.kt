@@ -963,7 +963,7 @@ class MainActivity : Activity() {
             setPadding(dp(2), 0, 0, dp(11))
         })
 
-        dspCard(content, "Equalizer", "Pick a preset, or drag the bands to taste.", initiallyExpanded = true) { body ->
+        dspCard(content, "Equalizer", "Pick a preset, or drag the bands to taste.", initiallyExpanded = false) { body ->
             eqPowerToggle = dspSwitch(body, "Equalizer", "Turn tone shaping on or off.") { _ ->
                 applyGraphicEq()
                 updateEqPresetUi()
@@ -1032,7 +1032,7 @@ class MainActivity : Activity() {
             updateEqPresetUi()
         }
 
-        dspCard(content, "Output level", "Set the overall level of your music.", initiallyExpanded = true) { body ->
+        dspCard(content, "Output level", "Set the overall level of your music.", initiallyExpanded = false) { body ->
             val saved = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
                 .getInt(KEY_MASTER_PREAMP, 150).coerceIn(0, 300)
             val (slider, _) = dspSlider(
@@ -1065,7 +1065,7 @@ class MainActivity : Activity() {
             content,
             "StereoWide",
             "Give your music a wider, more spacious stereo image.",
-            initiallyExpanded = true
+            initiallyExpanded = false
         ) { body ->
             stereoToggle = dspSwitch(
                 body,
