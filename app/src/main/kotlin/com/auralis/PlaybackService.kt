@@ -790,6 +790,16 @@ class PlaybackService : Service() {
     }
 
     private fun runOutput(generation: Long, track: AudioTrack) {
+        // Clip protection is the last stage before the AudioTrack, after every effect and crossfade.
+        val clipGuard = try { NativeSafetyLimiter(track.sampleRate) } catch (_: Throwable) { null }
+        try {
+            runOutputLoop(generation, track, clipGuard)
+        } finally {
+            clipGuard?.close()
+        }
+    }
+
+    private fun runOutputLoop(generation: Long, track: AudioTrack, clipGuard: NativeSafetyLimiter?) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         var currentBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
         var incomingBuffer = ByteBuffer.allocateDirect(1024 * 2 * 4).order(ByteOrder.LITTLE_ENDIAN)
@@ -836,6 +846,7 @@ class PlaybackService : Service() {
                 source.limit(frames * 8)
                 source
             }
+            clipGuard?.process(block, frames)
             var bytesRemaining = frames * 8
             while (bytesRemaining > 0 && outputGeneration == generation) {
                 val written = track.write(block, bytesRemaining, AudioTrack.WRITE_NON_BLOCKING)
