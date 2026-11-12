@@ -1,3 +1,4 @@
 build/
 core
 __pycache__/
+app/src/main/jniLibs/

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include "bass_boost.h"
 
 namespace auralis {
 
@@ -261,6 +262,7 @@ public:
     void setBalance(bool enabled, double normalized) noexcept;
     void setMono(bool enabled) noexcept;
     void setLimiter(bool enabled, LimiterPath path) noexcept;
+    void setBassBoost(bool enabled, double amount) noexcept;
     void setReverbEnabled(bool enabled) noexcept;
     void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
@@ -282,6 +284,7 @@ private:
     Balance balance_{};
     Mono mono_{};
     Limiter limiter_{};
+    BassBoost bassBoost_{};
     ReplayGain replayGain_{};
     ReplayGainMetadata replayGainMetadata_{};
     PowerampReverb reverb_;
@@ -321,11 +324,13 @@ public:
     void setBalance(bool enabled, double normalized) noexcept;
     void setMono(bool enabled) noexcept;
     void setLimiter(bool enabled, LimiterPath path) noexcept;
+    void setBassBoost(bool enabled, double amount) noexcept;
     void setReverbEnabled(bool enabled) noexcept;
     void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;
     void setReplayGain(int type, int source, int defaultGainMb, int preampMb) noexcept;
     void setReplayGainMetadata(const ReplayGainMetadata& metadata) noexcept;
+    void setMasterGainDb(double db) noexcept;
 private:
     struct ControlCommand {
         int kind=0, i0=0, i1=0, i2=0, i3=0;

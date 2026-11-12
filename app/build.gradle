@@ -3,20 +3,45 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def useTermuxPrebuiltNative = System.getenv('AURALIS_PREBUILT_NATIVE') == '1'
+
+dependencies {
+    implementation 'com.google.android.material:material:1.12.0'
+}
+
 android {
     namespace 'com.auralis'
     compileSdk 35
-    ndkVersion '27.2.12479018'
+    buildToolsVersion '35.0.0'
+    if (!useTermuxPrebuiltNative) {
+        ndkVersion '27.2.12479018'
+    }
 
     defaultConfig {
         applicationId 'com.auralis'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '1.0.0'
-        externalNativeBuild {
-            cmake {
-                cppFlags '-std=c++17 -O3 -Wall -Wextra'
+        versionCode 14
+        versionName '1.4.0'
+        if (!useTermuxPrebuiltNative) {
+            externalNativeBuild {
+                cmake {
+                    cppFlags '-std=c++17 -O3 -Wall -Wextra'
+                }
+            }
+        }
+    }
+
+    // Release signing is configured from the environment so no secret ever lives in the repo.
+    // See docs/RELEASING.md. Without these variables the release build is left unsigned.
+    signingConfigs {
+        release {
+            def keystorePath = System.getenv('AURALIS_KEYSTORE')
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword System.getenv('AURALIS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('AURALIS_KEY_ALIAS')
+                keyPassword System.getenv('AURALIS_KEY_PASSWORD')
             }
         }
     }
@@ -24,6 +49,9 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            if (System.getenv('AURALIS_KEYSTORE')) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
@@ -36,10 +64,18 @@ android {
         jvmTarget = '17'
     }
 
-    externalNativeBuild {
-        cmake {
-            path file('src/main/cpp/CMakeLists.txt')
-            version '3.22.1'
+    if (!useTermuxPrebuiltNative) {
+        externalNativeBuild {
+            cmake {
+                path file('src/main/cpp/CMakeLists.txt')
+                version '3.22.1'
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs += ['src/main/jniLibs']
         }
     }
 }
