@@ -667,7 +667,7 @@ void PowerampReverb::process(float* x, std::size_t frames) noexcept {
 AuralisDsp::AuralisDsp(int sampleRate) : sampleRate_(std::max(1, sampleRate)), reverb_(sampleRate_) {
     bassBoost_.prepare(sampleRate_);
 }
-void AuralisDsp::setBassBoost(bool enabled, double amount, bool smallSpeaker) noexcept { bassBoost_.configure(enabled, amount, smallSpeaker); }
+void AuralisDsp::setBassBoost(bool enabled, double amount, bool smallSpeaker, double listenLevel) noexcept { bassBoost_.configure(enabled, amount, smallSpeaker, listenLevel); }
 void AuralisDsp::setStereoWide(bool enabled, double percent) noexcept { stereoWide_.configure(enabled, percent); }
 void AuralisDsp::setBalance(bool enabled, double normalized) noexcept { balance_.configure(enabled, normalized); }
 void AuralisDsp::setMono(bool enabled) noexcept { mono_.configure(enabled); }
@@ -816,8 +816,8 @@ void AudioPipeline::setMasterGainDb(double db) noexcept {
     ControlCommand c{}; c.kind = 10; c.d0 = std::clamp(db, -30.0, 30.0);
     (void)publish(c);
 }
-void AudioPipeline::setBassBoost(bool enabled, double amount, bool smallSpeaker) noexcept {
-    ControlCommand c{}; c.kind = 11; c.b0 = enabled; c.d0 = amount; c.b1 = smallSpeaker; (void)publish(c);
+void AudioPipeline::setBassBoost(bool enabled, double amount, bool smallSpeaker, double listenLevel) noexcept {
+    ControlCommand c{}; c.kind = 11; c.b0 = enabled; c.d0 = amount; c.b1 = smallSpeaker; c.d1 = listenLevel; (void)publish(c);
 }
 void AudioPipeline::applyPendingControls() noexcept {
     for (;;) {
@@ -843,7 +843,7 @@ void AudioPipeline::applyPendingControls() noexcept {
         } else if (c.kind == 10) {
             dsp_.setMasterGainDb(c.d0);
         } else if (c.kind == 11) {
-            dsp_.setBassBoost(c.b0, c.d0, c.b1);
+            dsp_.setBassBoost(c.b0, c.d0, c.b1, c.d1);
         }
     }
 }

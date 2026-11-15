@@ -23,8 +23,8 @@ namespace auralis {
  *     headphones. A gentle dip around 350 Hz clears the boxy region the extra bass would otherwise
  *     cloud, a presence lift around 3 kHz keeps vocals forward, and a small high-shelf lift at 8 kHz
  *     keeps the added weight from sounding dull. All three scale with the strength.
- *  6. No clipping inside the stage: loud tracks are left to the output limiter, which turns the
- *     level down smoothly instead of distorting the waveform.
+ *  6. Bass priority: no clipping inside the stage. When bass plus the rest would run out of room, only
+ *     the rest ducks for that instant, so the boosted bass is never shrunk by the output limiter.
  *  7. Device-aware: headphones get a clean low shelf, small speakers get stronger virtual bass.
  *
  * Disabled, the stage is bit-exact pass-through and uses no CPU. Enabling, disabling and changing
@@ -36,14 +36,16 @@ public:
     // amount: 0..1 overall strength (about 0.35 low, 0.65 medium, 1.0 high).
     // smallSpeaker: true when playing through a phone or other small speaker, false for headphones
     // and earbuds. Speakers get stronger virtual bass and a lighter deep lift.
-    void configure(bool enabled, double amount, bool smallSpeaker = false) noexcept;
+    // listenLevel: the phone's music volume, 0 (silent) to 1 (full). The ear hears less bass when it is
+    // quiet, so low volumes get extra lift.
+    void configure(bool enabled, double amount, bool smallSpeaker = false, double listenLevel = 1.0) noexcept;
     void process(float* interleavedStereo, std::size_t frames) noexcept;
 
     bool enabled() const noexcept { return enabled_; }
     // Low-shelf lift currently being applied to the bass band, in dB (for tests and diagnostics).
     double currentBoostDb() const noexcept { return boostDb_; }
     // Largest low-shelf lift at full strength.
-    static constexpr double kMaxBoostDb = 12.0;
+    static constexpr double kMaxBoostDb = 15.0;
 
 private:
     struct Biquad {
@@ -72,19 +74,27 @@ private:
     bool enabled_ = false;
     bool running_ = false;
     bool speaker_ = false;
+    double listenLevel_ = 1.0;
+    double fastEnv_ = 0.0;
+    double slowEnv_ = 0.0;
+    double punch_ = 0.0;
+    double duck_ = 1.0;
+    double duckAttackCoeff_ = 0.0;
+    double duckReleaseCoeff_ = 0.0;
+    double fastAttackCoeff_ = 0.0;
+    double fastReleaseCoeff_ = 0.0;
+    double slowAttackCoeff_ = 0.0;
+    double slowReleaseCoeff_ = 0.0;
+    double punchAttackCoeff_ = 0.0;
+    double punchReleaseCoeff_ = 0.0;
     double harmonicGain_ = 0.0;
     double amountTarget_ = 0.0;
     double amount_ = 0.0;
     double mix_ = 0.0;
     double env_ = 0.0;
     double vbEnv_ = 0.0;
-    double peakEnv_ = 0.0;
-    double peakAttackCoeff_ = 0.0;
-    double peakReleaseCoeff_ = 0.0;
     double gain_ = 1.0;
     double gainTarget_ = 1.0;
-    double trim_ = 1.0;
-    double trimTarget_ = 1.0;
     double boostDb_ = 0.0;
     double voicingAppliedAmount_ = -1.0;
     int controlCounter_ = 0;

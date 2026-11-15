@@ -41,16 +41,27 @@ constexpr double kMinBoostFraction = 0.6;
 // Virtual bass: how much of the generated harmonics is mixed in. Headphones already move real air at
 // 50-100 Hz, so they get a light touch; phone and small speakers cannot, so the ear is given the
 // harmonics instead (the "missing fundamental" trick) and the unreproducible deep lift is eased back.
-constexpr double kHarmonicHeadphones = 2.2;
-constexpr double kHarmonicSpeaker = 7.0;
+constexpr double kHarmonicHeadphones = 3.0;
+constexpr double kHarmonicSpeaker = 8.0;
 constexpr double kSpeakerLiftScale = 0.75;
 // 4th-order Butterworth section Qs for the band-limiting filters.
 constexpr double kButterQ1 = 0.54119610;
 constexpr double kButterQ2 = 1.30656296;
 constexpr double kSanityLimit = 16.0;
-// Headroom: for every dB of bass lift the whole signal is brought down by this fraction of a dB, so
-// loud tracks keep room for the extra bass and the output limiter rarely has to step in.
-constexpr double kHeadroomTrim = 0.28;
+// "Slam": the boosted bass is soft-limited on its own (not the whole mix), so it gets dense and fat
+// instead of just louder. It lets the bass hit hard on loud masters without tripping the output limiter
+// for everything else, and the extra harmonics make it audible even on small drivers.
+constexpr double kBassCeiling = 0.65;
+// "Punch": the first moment of a kick or bass note gets extra lift, which is what you feel in the chest.
+constexpr double kPunchGain = 0.9;
+constexpr double kPunchOnsetRatio = 1.25;
+// Loudness compensation: the ear hears much less bass at low volume, so quiet listening gets more lift.
+constexpr double kQuietListeningExtra = 0.45;
+constexpr double kMaxTotalBoostDb = 19.0;
+// Bass priority: when bass plus everything else would go past this level, only the everything-else
+// (vocals, hats, synths) is turned down for that instant, never the bass. Quiet music is never touched.
+constexpr double kCeiling = 0.95;
+constexpr double kMinDuck = 0.5;
 constexpr double kSilent = 1.0e-4;
 constexpr int kControlInterval = 16;
 
@@ -140,8 +151,14 @@ void BassBoost::prepare(int sampleRate) noexcept {
     attackCoeff_ = timeConstantCoeff(0.004, sampleRate_);
     releaseCoeff_ = timeConstantCoeff(0.120, sampleRate_);
     gainCoeff_ = timeConstantCoeff(0.050, sampleRate_);
-    peakAttackCoeff_ = timeConstantCoeff(0.005, sampleRate_);
-    peakReleaseCoeff_ = timeConstantCoeff(0.800, sampleRate_);
+    fastAttackCoeff_ = timeConstantCoeff(0.001, sampleRate_);
+    fastReleaseCoeff_ = timeConstantCoeff(0.020, sampleRate_);
+    slowAttackCoeff_ = timeConstantCoeff(0.025, sampleRate_);
+    slowReleaseCoeff_ = timeConstantCoeff(0.150, sampleRate_);
+    punchAttackCoeff_ = timeConstantCoeff(0.002, sampleRate_);
+    punchReleaseCoeff_ = timeConstantCoeff(0.040, sampleRate_);
+    duckAttackCoeff_ = timeConstantCoeff(0.0004, sampleRate_);
+    duckReleaseCoeff_ = timeConstantCoeff(0.090, sampleRate_);
     subsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
     subsonicVb_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
     liftSubsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
@@ -156,8 +173,9 @@ void BassBoost::prepare(int sampleRate) noexcept {
     resetState();
 }
 
-void BassBoost::configure(bool enabled, double amount, bool smallSpeaker) noexcept {
+void BassBoost::configure(bool enabled, double amount, bool smallSpeaker, double listenLevel) noexcept {
     enabled_ = enabled;
+    listenLevel_ = std::clamp(listenLevel, 0.0, 1.0);
     speaker_ = smallSpeaker;
     amountTarget_ = std::isfinite(amount) ? std::clamp(amount, 0.0, 1.0) : 0.0;
 }
@@ -173,7 +191,10 @@ void BassBoost::resetState() noexcept {
     vbLow_.reset();
     vbLow2_.reset();
     vbEnv_ = 0.0;
-    peakEnv_ = 0.0;
+    duck_ = 1.0;
+    fastEnv_ = 0.0;
+    slowEnv_ = 0.0;
+    punch_ = 0.0;
     harmonicHigh_.reset();
     harmonicLow_.reset();
     airLeft_.reset();
@@ -187,8 +208,6 @@ void BassBoost::resetState() noexcept {
     env_ = 0.0;
     gain_ = 1.0;
     gainTarget_ = 1.0;
-    trim_ = 1.0;
-    trimTarget_ = 1.0;
     boostDb_ = 0.0;
     harmonicGain_ = speaker_ ? kHarmonicSpeaker : kHarmonicHeadphones;
     controlCounter_ = 0;
@@ -210,13 +229,10 @@ void BassBoost::updateControl() noexcept {
     const double envDb = 20.0 * std::log10(env_ + 1.0e-6);
     const double t = std::clamp((envDb - kQuietDb) / (kLoudDb - kQuietDb), 0.0, 1.0);
     const double fraction = 1.0 - (1.0 - kMinBoostFraction) * smoothstep(t);
-    boostDb_ = kMaxBoostDb * amount_ * fraction * (speaker_ ? kSpeakerLiftScale : 1.0);
+    const double volumeScale = 1.0 + kQuietListeningExtra * (1.0 - listenLevel_);
+    boostDb_ = std::min(kMaxTotalBoostDb, kMaxBoostDb * amount_ * fraction * volumeScale * (speaker_ ? kSpeakerLiftScale : 1.0));
     // The low band is added back on top of the signal, so the extra gain is (g - 1).
     gainTarget_ = std::pow(10.0, boostDb_ / 20.0);
-    // Only hot tracks need the headroom: a quiet track keeps its full level, a loud master gets the trim.
-    const double peakDb = 20.0 * std::log10(peakEnv_ + 1e-9);
-    const double hot = std::clamp((peakDb + 12.0) / 9.0, 0.0, 1.0);
-    trimTarget_ = std::pow(10.0, -kHeadroomTrim * boostDb_ * hot / 20.0);
     updateVoicing();
 }
 
@@ -235,7 +251,7 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         amount_ = amountTarget_;
         updateControl();
         gain_ = 1.0;
-        trim_ = trimTarget_;
+        duck_ = 1.0;
         running_ = true;
     }
 
@@ -255,8 +271,11 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         // Follow the bass level: quick to rise, slow to fall.
         const double magnitude = std::fabs(low);
         env_ += (magnitude - env_) * (magnitude > env_ ? attackCoeff_ : releaseCoeff_);
-        const double inputPeak = std::max(std::fabs(static_cast<double>(x[2 * i])), std::fabs(static_cast<double>(x[2 * i + 1])));
-        peakEnv_ += (inputPeak - peakEnv_) * (inputPeak > peakEnv_ ? peakAttackCoeff_ : peakReleaseCoeff_);
+        // Onset detector for the "punch": a quick follower against a slow one.
+        fastEnv_ += (magnitude - fastEnv_) * (magnitude > fastEnv_ ? fastAttackCoeff_ : fastReleaseCoeff_);
+        slowEnv_ += (magnitude - slowEnv_) * (magnitude > slowEnv_ ? slowAttackCoeff_ : slowReleaseCoeff_);
+        const double onset = std::clamp((fastEnv_ / (slowEnv_ + 0.004) - kPunchOnsetRatio) / 1.0, 0.0, 1.0);
+        punch_ += (onset - punch_) * (onset > punch_ ? punchAttackCoeff_ : punchReleaseCoeff_);
 
         if (++controlCounter_ >= kControlInterval) {
             controlCounter_ = 0;
@@ -264,7 +283,6 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
             shelf_.lowShelf(sampleRate_, kShelfHz, kShelfQ, 20.0 * std::log10(gain_));
         }
         gain_ += (gainTarget_ - gain_) * gainCoeff_;
-        trim_ += (trimTarget_ - trim_) * gainCoeff_;
 
         // 1. Dynamic low boost: only the shelf's added energy, with inaudible rumble removed. Using a
         //    shelf (not a filtered copy of the bass band) keeps the boost in phase with the music, so
@@ -281,7 +299,19 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         const double shaped = (std::tanh(2.5 * norm) + 0.3 * norm * norm) * vbEnv_;
         const double harmonics = harmonicLow_.process(harmonicHigh_.process(shaped));
 
-        const double extra = lift + harmonicGain_ * amount_ * harmonics;
+        // 3. Punch: extra lift on the front of each kick or bass note.
+        const double punchLift = lift * (1.0 + kPunchGain * punch_);
+
+        // 4. Slam: soft-limit the boosted bass band on its own, never going below what the track had.
+        const double boostedBass = low + punchLift;
+        double slam = 0.0;
+        if (std::fabs(boostedBass) > 0.05) {
+            double limited = kBassCeiling * std::tanh(boostedBass / kBassCeiling);
+            if (std::fabs(limited) < std::fabs(low)) limited = low;
+            slam = (limited - boostedBass) * amount_;
+        }
+
+        const double extra = punchLift + slam + harmonicGain_ * amount_ * harmonics;
 
         // 5. JBL voicing (mid dip, presence lift, air), blended in with the same smoothing as everything else.
         const double airL = airLeft_.process(presenceLeft_.process(tuckLeft_.process(l)));
@@ -289,12 +319,19 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         const double baseL = l + (airL - l) * mix_;
         const double baseR = r + (airR - r) * mix_;
 
-        // 6. Blend the effect; peak control is left to the output limiter.
-        const double blendedL = baseL + extra * mix_;
-        const double blendedR = baseR + extra * mix_;
-        const double trim = 1.0 + (trim_ - 1.0) * mix_;
-        x[2 * i] = static_cast<float>(sanitize(blendedL * trim));
-        x[2 * i + 1] = static_cast<float>(sanitize(blendedR * trim));
+        // 6. Bass priority. The bass (with its boost) is kept whole; if bass plus the rest of the music
+        //    would go past the ceiling, only the rest ducks for that moment. The output limiter then has
+        //    little left to do, so it does not shrink the bass you just boosted.
+        const double bassTotal = low + extra * mix_;
+        const double restL = baseL - low;
+        const double restR = baseR - low;
+        const double restPeak = std::max(std::fabs(restL), std::fabs(restR));
+        const double headroom = std::max(0.0, kCeiling - std::fabs(bassTotal));
+        const double duckTarget = restPeak > headroom ? std::clamp(headroom / restPeak, kMinDuck, 1.0) : 1.0;
+        duck_ += (duckTarget - duck_) * (duckTarget < duck_ ? duckAttackCoeff_ : duckReleaseCoeff_);
+        const double duck = 1.0 + (duck_ - 1.0) * mix_;
+        x[2 * i] = static_cast<float>(sanitize(restL * duck + bassTotal));
+        x[2 * i + 1] = static_cast<float>(sanitize(restR * duck + bassTotal));
     }
 }
 

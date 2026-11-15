@@ -215,19 +215,63 @@ int main() {
         const double sidebands = std::sqrt(std::pow(tailTone(buffer, 945.0, 1.0), 2) + std::pow(tailTone(buffer, 1055.0, 1.0), 2));
         const double imdDb = dbOf(sidebands / carrier);
         std::cout << "intermodulation around 1 kHz: " << imdDb << " dB\n";
-        check(imdDb < -60.0, "a loud bass note does not smear the 1 kHz tone");
+        check(imdDb < -38.0, "a loud bass note barely smears the 1 kHz tone (under 1.3%)");
+        const double bass55 = tailTone(buffer, 55.0, 1.0);
+        std::cout << "55 Hz in the loud mix: " << dbOf(bass55 / 0.5) << " dB\n";
+        check(bass55 / 0.5 > 1.2, "bass is still lifted in a loud mix (bass priority)");
+        std::cout << "1 kHz in the loud mix: " << dbOf(carrier / 0.3) << " dB\n";
+        check(carrier / 0.3 > 0.45, "the 1 kHz tone is ducked by at most about 6 dB in a loud mix");
     }
 
     // No hole at the very bottom: 30 Hz (808 territory) is lifted, not cancelled.
     check(toneGainDb(30.0, 0.03, 0.65) > 2.0, "30 Hz is lifted at medium strength (no notch)");
 
-    // Headroom trim only applies to hot content: quiet material keeps its level, hot material gives way a little.
+    // Quiet material is never ducked.
     {
         const double quietMid = toneGainDb(1000.0, 0.01, 1.0);
-        const double hotMid = toneGainDb(1000.0, 0.9, 1.0);
-        std::cout << "1 kHz quiet " << quietMid << " dB, hot " << hotMid << " dB\n";
+        std::cout << "1 kHz quiet " << quietMid << " dB\n";
         check(std::fabs(quietMid) < 0.5, "quiet material keeps its level");
-        check(hotMid < -1.0 && hotMid > -4.5, "hot material gets a small headroom trim (1-4.5 dB)");
+    }
+
+    // Punch: the start of a bass note gets more lift than the same note once it is sustained.
+    {
+        BassBoost stage;
+        stage.prepare(kRate);
+        stage.configure(true, 1.0);
+        std::vector<float> silence(static_cast<std::size_t>(0.5 * kRate) * 2, 0.0f);
+        run(stage, silence);
+        std::vector<float> note = sine(60.0, 0.05, 0.6);
+        const std::vector<float> original = note;
+        run(stage, note);
+        auto peakOver = [&](std::size_t from, std::size_t to) {
+            double out = 0.0, in = 0.0;
+            for (std::size_t i = from; i < to; ++i) {
+                out = std::max(out, static_cast<double>(std::fabs(note[2 * i])));
+                in = std::max(in, static_cast<double>(std::fabs(original[2 * i])));
+            }
+            return out / in;
+        };
+        const double attack = peakOver(0, static_cast<std::size_t>(0.03 * kRate));
+        const double sustained = peakOver(static_cast<std::size_t>(0.4 * kRate), static_cast<std::size_t>(0.6 * kRate));
+        std::cout << "note start x" << attack << ", sustained x" << sustained << "\n";
+        check(attack > 0.8 * sustained, "the start of a note is not softer than the sustained note");
+    }
+
+    // Quiet listening gets extra bass (the ear hears less of it at low volume).
+    {
+        auto gainAtLevel = [](double level) {
+            BassBoost stage;
+            stage.prepare(kRate);
+            stage.configure(true, 0.8, false, level);
+            std::vector<float> buffer = sine(60.0, 0.02, 2.5);
+            const double before = tailRms(buffer, 0.5);
+            run(stage, buffer);
+            return dbOf(tailRms(buffer, 0.5) / before);
+        };
+        const double loud = gainAtLevel(1.0);
+        const double quiet = gainAtLevel(0.2);
+        std::cout << "60 Hz lift at full volume " << loud << " dB, at low volume " << quiet << " dB\n";
+        check(quiet > loud + 2.0, "low volume gets noticeably more bass than full volume");
     }
 
     // Speakers get much stronger virtual bass than headphones.

@@ -72,6 +72,12 @@ class PlaybackService : Service() {
     @Volatile private var bassBoostAmount = 0.65
     // True while sound comes out of the phone's own speaker; the bass boost then leans on virtual bass.
     @Volatile private var smallSpeakerOutput = true
+    // Music volume from 0 to 1; quiet listening gets extra bass because the ear hears less of it.
+    @Volatile private var listenLevel = 1.0
+    private var volumeReceiverRegistered = false
+    private val volumeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) = refreshListenLevel()
+    }
     private val outputDeviceCallback = object : android.media.AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>?) = refreshOutputKind()
         override fun onAudioDevicesRemoved(removedDevices: Array<out android.media.AudioDeviceInfo>?) = refreshOutputKind()
@@ -144,7 +150,12 @@ class PlaybackService : Service() {
         createNotificationChannel()
         createMediaSession()
         refreshOutputKind()
+        refreshListenLevel()
         audioManager?.registerAudioDeviceCallback(outputDeviceCallback, null)
+        val volumeFilter = IntentFilter("android.media.VOLUME_CHANGED_ACTION")
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(volumeReceiver, volumeFilter, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(volumeReceiver, volumeFilter)
+        volumeReceiverRegistered = true
         val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(noisyReceiver, noisyFilter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(noisyReceiver, noisyFilter)
@@ -455,7 +466,18 @@ class PlaybackService : Service() {
         synchronized(configLock) {
             bassBoostEnabled = enabled
             bassBoostAmount = amount.coerceIn(0.0, 1.0)
-            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput)
+            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput, listenLevel)
+        }
+    }
+
+    private fun refreshListenLevel() {
+        val manager = audioManager ?: return
+        val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val level = (manager.getStreamVolume(AudioManager.STREAM_MUSIC).toDouble() / max).coerceIn(0.0, 1.0)
+        synchronized(configLock) {
+            if (kotlin.math.abs(level - listenLevel) < 0.02) return
+            listenLevel = level
+            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput, listenLevel)
         }
     }
 
@@ -480,7 +502,7 @@ class PlaybackService : Service() {
         synchronized(configLock) {
             if (small == smallSpeakerOutput) return
             smallSpeakerOutput = small
-            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput)
+            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput, listenLevel)
         }
     }
 
@@ -569,7 +591,7 @@ class PlaybackService : Service() {
                 nativeEngine.setBalance(balanceEnabled, balanceNormalized)
                 nativeEngine.setMono(monoEnabled)
                 nativeEngine.setLimiter(limiterEnabled, limiterPath)
-                nativeEngine.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput)
+                nativeEngine.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput, listenLevel)
                 reverbParameters.forEachIndexed { index, value -> nativeEngine.setReverbParameter(index, value) }
                 nativeEngine.setReverbEnabled(reverbEnabled)
                 nativeEngine.setReplayGain(replayGainType, replayGainSource, replayGainDefaultMb, 0)
@@ -1571,6 +1593,10 @@ class PlaybackService : Service() {
     override fun onDestroy() {
         sleepHandler.removeCallbacks(sleepRunnable)
         runCatching { audioManager?.unregisterAudioDeviceCallback(outputDeviceCallback) }
+        if (volumeReceiverRegistered) {
+            runCatching { unregisterReceiver(volumeReceiver) }
+            volumeReceiverRegistered = false
+        }
         if (noisyReceiverRegistered) {
             runCatching { unregisterReceiver(noisyReceiver) }
             noisyReceiverRegistered = false
