@@ -70,6 +70,12 @@ class PlaybackService : Service() {
     @Volatile private var limiterPath = 0
     @Volatile private var bassBoostEnabled = false
     @Volatile private var bassBoostAmount = 0.65
+    // True while sound comes out of the phone's own speaker; the bass boost then leans on virtual bass.
+    @Volatile private var smallSpeakerOutput = true
+    private val outputDeviceCallback = object : android.media.AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>?) = refreshOutputKind()
+        override fun onAudioDevicesRemoved(removedDevices: Array<out android.media.AudioDeviceInfo>?) = refreshOutputKind()
+    }
     @Volatile private var reverbEnabled = false
     @Volatile private var replayGainType = 0          // 0 None, 1 Apply, 2 Apply Peak
     @Volatile private var replayGainSource = 0        // 0 Album, 1 Track
@@ -137,6 +143,8 @@ class PlaybackService : Service() {
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Auralis:Playback")
         createNotificationChannel()
         createMediaSession()
+        refreshOutputKind()
+        audioManager?.registerAudioDeviceCallback(outputDeviceCallback, null)
         val noisyFilter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(noisyReceiver, noisyFilter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(noisyReceiver, noisyFilter)
@@ -447,7 +455,32 @@ class PlaybackService : Service() {
         synchronized(configLock) {
             bassBoostEnabled = enabled
             bassBoostAmount = amount.coerceIn(0.0, 1.0)
-            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount)
+            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput)
+        }
+    }
+
+    // Headphones, earbuds, USB and Bluetooth audio are "not a small speaker"; anything else is.
+    private fun refreshOutputKind() {
+        val devices = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS) ?: return
+        val external = devices.any {
+            when (it.type) {
+                android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                android.media.AudioDeviceInfo.TYPE_USB_HEADSET,
+                android.media.AudioDeviceInfo.TYPE_USB_DEVICE,
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                android.media.AudioDeviceInfo.TYPE_HEARING_AID,
+                android.media.AudioDeviceInfo.TYPE_BLE_HEADSET,
+                android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER -> true
+                else -> false
+            }
+        }
+        val small = !external
+        synchronized(configLock) {
+            if (small == smallSpeakerOutput) return
+            smallSpeakerOutput = small
+            session?.engine?.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput)
         }
     }
 
@@ -536,7 +569,7 @@ class PlaybackService : Service() {
                 nativeEngine.setBalance(balanceEnabled, balanceNormalized)
                 nativeEngine.setMono(monoEnabled)
                 nativeEngine.setLimiter(limiterEnabled, limiterPath)
-                nativeEngine.setBassBoost(bassBoostEnabled, bassBoostAmount)
+                nativeEngine.setBassBoost(bassBoostEnabled, bassBoostAmount, smallSpeakerOutput)
                 reverbParameters.forEachIndexed { index, value -> nativeEngine.setReverbParameter(index, value) }
                 nativeEngine.setReverbEnabled(reverbEnabled)
                 nativeEngine.setReplayGain(replayGainType, replayGainSource, replayGainDefaultMb, 0)
@@ -1537,6 +1570,7 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         sleepHandler.removeCallbacks(sleepRunnable)
+        runCatching { audioManager?.unregisterAudioDeviceCallback(outputDeviceCallback) }
         if (noisyReceiverRegistered) {
             runCatching { unregisterReceiver(noisyReceiver) }
             noisyReceiverRegistered = false

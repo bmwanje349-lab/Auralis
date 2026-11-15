@@ -57,9 +57,9 @@ Java_com_auralis_NativeAudioEngine_nativeSetBalance(JNIEnv*, jclass, jlong handl
     if (p) p->setBalance(enabled == JNI_TRUE, normalized);
 }
 extern "C" JNIEXPORT void JNICALL
-Java_com_auralis_NativeAudioEngine_nativeSetBassBoost(JNIEnv*, jclass, jlong handle, jboolean enabled, jdouble amount) {
+Java_com_auralis_NativeAudioEngine_nativeSetBassBoost(JNIEnv*, jclass, jlong handle, jboolean enabled, jdouble amount, jboolean smallSpeaker) {
     auto* p = reinterpret_cast<AudioPipeline*>(handle);
-    if (p) p->setBassBoost(enabled == JNI_TRUE, amount);
+    if (p) p->setBassBoost(enabled == JNI_TRUE, amount, smallSpeaker == JNI_TRUE);
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_auralis_NativeAudioEngine_nativeSetMono(JNIEnv*, jclass, jlong handle, jboolean enabled) {

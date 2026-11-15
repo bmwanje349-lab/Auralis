@@ -262,7 +262,7 @@ public:
     void setBalance(bool enabled, double normalized) noexcept;
     void setMono(bool enabled) noexcept;
     void setLimiter(bool enabled, LimiterPath path) noexcept;
-    void setBassBoost(bool enabled, double amount) noexcept;
+    void setBassBoost(bool enabled, double amount, bool smallSpeaker = false) noexcept;
     void setReverbEnabled(bool enabled) noexcept;
     void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q,
@@ -324,7 +324,7 @@ public:
     void setBalance(bool enabled, double normalized) noexcept;
     void setMono(bool enabled) noexcept;
     void setLimiter(bool enabled, LimiterPath path) noexcept;
-    void setBassBoost(bool enabled, double amount) noexcept;
+    void setBassBoost(bool enabled, double amount, bool smallSpeaker = false) noexcept;
     void setReverbEnabled(bool enabled) noexcept;
     void setReverbParameter(int index, double value) noexcept;
     bool setEqBand(int index, bool enabled, int type, int frequencyHz, double q, double gainDb, int channel) noexcept;

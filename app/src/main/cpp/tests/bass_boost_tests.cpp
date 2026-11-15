@@ -111,7 +111,7 @@ int main() {
     const double loudHigh = toneGainDb(60.0, 0.6, 1.0);
     std::cout << "60 Hz at -4 dBFS, high: " << loudHigh << " dB\n";
     check(loudHigh < quietHigh - 3.0, "boost eases off as the bass gets louder");
-    check(loudHigh > 0.5, "loud bass is still lifted a little");
+    check(loudHigh > 3.0, "loud bass is still lifted clearly, so Heavy stays heavy on loud tracks");
 
     // Subsonic rumble is not boosted.
     const double rumble = toneGainDb(15.0, 0.1, 1.0);
@@ -169,7 +169,8 @@ int main() {
         check(tailTone(plain, 180.0, 0.5) < 1.0e-4, "the plain input has no 180 Hz energy");
     }
 
-    // Safety: a full-scale, bass-heavy signal never reaches or exceeds full scale, and stays finite.
+    // Safety: a full-scale, bass-heavy signal stays finite and sane. The stage never bends the waveform
+    // itself (that is the output limiter's job), so peaks above full scale are expected and allowed.
     {
         BassBoost stage;
         stage.prepare(kRate);
@@ -193,7 +194,57 @@ int main() {
         }
         std::cout << "peak after boost: " << peak << "\n";
         check(finite, "output stays finite");
-        check(peak < 1.0, "output never reaches full scale");
+        check(peak < 4.0, "output stays within a sane range");
+    }
+
+    // Loud mix: no waveform bending inside the stage, so the 1 kHz tone is not smeared by the bass.
+    {
+        BassBoost stage;
+        stage.prepare(kRate);
+        stage.configure(true, 1.0);
+        const std::size_t frames = static_cast<std::size_t>(4.0 * kRate);
+        std::vector<float> buffer(frames * 2);
+        for (std::size_t i = 0; i < frames; ++i) {
+            const double t = static_cast<double>(i) / kRate;
+            const float v = static_cast<float>(0.5 * std::sin(2.0 * kPi * 55.0 * t) + 0.3 * std::sin(2.0 * kPi * 1000.0 * t));
+            buffer[2 * i] = v;
+            buffer[2 * i + 1] = v;
+        }
+        run(stage, buffer);
+        const double carrier = tailTone(buffer, 1000.0, 1.0);
+        const double sidebands = std::sqrt(std::pow(tailTone(buffer, 945.0, 1.0), 2) + std::pow(tailTone(buffer, 1055.0, 1.0), 2));
+        const double imdDb = dbOf(sidebands / carrier);
+        std::cout << "intermodulation around 1 kHz: " << imdDb << " dB\n";
+        check(imdDb < -60.0, "a loud bass note does not smear the 1 kHz tone");
+    }
+
+    // No hole at the very bottom: 30 Hz (808 territory) is lifted, not cancelled.
+    check(toneGainDb(30.0, 0.03, 0.65) > 2.0, "30 Hz is lifted at medium strength (no notch)");
+
+    // Headroom trim only applies to hot content: quiet material keeps its level, hot material gives way a little.
+    {
+        const double quietMid = toneGainDb(1000.0, 0.01, 1.0);
+        const double hotMid = toneGainDb(1000.0, 0.9, 1.0);
+        std::cout << "1 kHz quiet " << quietMid << " dB, hot " << hotMid << " dB\n";
+        check(std::fabs(quietMid) < 0.5, "quiet material keeps its level");
+        check(hotMid < -1.0 && hotMid > -4.5, "hot material gets a small headroom trim (1-4.5 dB)");
+    }
+
+    // Speakers get much stronger virtual bass than headphones.
+    {
+        auto harmonic = [](bool speaker) {
+            BassBoost stage;
+            stage.prepare(kRate);
+            stage.configure(true, 1.0, speaker);
+            std::vector<float> buffer = sine(60.0, 0.1, 2.5);
+            run(stage, buffer);
+            return tailTone(buffer, 180.0, 0.5);
+        };
+        const double headphones = harmonic(false);
+        const double speaker = harmonic(true);
+        std::cout << "3rd harmonic: headphones " << headphones << ", speaker " << speaker << "\n";
+        check(speaker > headphones * 2.0, "speaker mode adds much stronger virtual bass");
+        check(headphones > 0.005, "headphone mode still adds audible warmth");
     }
 
     // Switching on mid-note does not click: no sample step much bigger than the music itself.
@@ -216,8 +267,19 @@ int main() {
             maxStep = std::max(maxStep, static_cast<double>(std::fabs(joined[2 * i] - joined[2 * (i - 1)])));
             maxOriginalStep = std::max(maxOriginalStep, static_cast<double>(std::fabs(original[2 * i] - original[2 * (i - 1)])));
         }
-        std::cout << "largest step " << maxStep << " vs original " << maxOriginalStep << "\n";
-        check(maxStep < maxOriginalStep * 3.0, "enabling mid-note is click-free");
+        // Compare with the settled, fully boosted signal: the switch-on may not be rougher than that.
+        BassBoost settledStage;
+        settledStage.prepare(kRate);
+        settledStage.configure(true, 1.0);
+        std::vector<float> settled = sine(80.0, 0.5, 1.0);
+        run(settledStage, settled);
+        double settledStep = 0.0;
+        for (std::size_t i = settled.size() / 4; i < settled.size() / 2; ++i) {
+            if (i < 1) continue;
+            settledStep = std::max(settledStep, static_cast<double>(std::fabs(settled[2 * i] - settled[2 * (i - 1)])));
+        }
+        std::cout << "largest step " << maxStep << " vs settled " << settledStep << " (original " << maxOriginalStep << ")\n";
+        check(maxStep < settledStep * 1.5, "enabling mid-note is click-free");
     }
 
     // Switching off fades back to exact pass-through, using no processing afterwards.

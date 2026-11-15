@@ -23,7 +23,9 @@ namespace auralis {
  *     headphones. A gentle dip around 350 Hz clears the boxy region the extra bass would otherwise
  *     cloud, a presence lift around 3 kHz keeps vocals forward, and a small high-shelf lift at 8 kHz
  *     keeps the added weight from sounding dull. All three scale with the strength.
- *  6. A soft peak guard, so the extra energy never hard-clips.
+ *  6. No clipping inside the stage: loud tracks are left to the output limiter, which turns the
+ *     level down smoothly instead of distorting the waveform.
+ *  7. Device-aware: headphones get a clean low shelf, small speakers get stronger virtual bass.
  *
  * Disabled, the stage is bit-exact pass-through and uses no CPU. Enabling, disabling and changing
  * the amount are smoothed, so there are no clicks. Call all methods from the DSP thread.
@@ -32,7 +34,9 @@ class BassBoost {
 public:
     void prepare(int sampleRate) noexcept;
     // amount: 0..1 overall strength (about 0.35 low, 0.65 medium, 1.0 high).
-    void configure(bool enabled, double amount) noexcept;
+    // smallSpeaker: true when playing through a phone or other small speaker, false for headphones
+    // and earbuds. Speakers get stronger virtual bass and a lighter deep lift.
+    void configure(bool enabled, double amount, bool smallSpeaker = false) noexcept;
     void process(float* interleavedStereo, std::size_t frames) noexcept;
 
     bool enabled() const noexcept { return enabled_; }
@@ -67,12 +71,20 @@ private:
     double sampleRate_ = 48000.0;
     bool enabled_ = false;
     bool running_ = false;
+    bool speaker_ = false;
+    double harmonicGain_ = 0.0;
     double amountTarget_ = 0.0;
     double amount_ = 0.0;
     double mix_ = 0.0;
     double env_ = 0.0;
+    double vbEnv_ = 0.0;
+    double peakEnv_ = 0.0;
+    double peakAttackCoeff_ = 0.0;
+    double peakReleaseCoeff_ = 0.0;
     double gain_ = 1.0;
     double gainTarget_ = 1.0;
+    double trim_ = 1.0;
+    double trimTarget_ = 1.0;
     double boostDb_ = 0.0;
     double voicingAppliedAmount_ = -1.0;
     int controlCounter_ = 0;
@@ -86,6 +98,10 @@ private:
     Biquad liftSubsonic_{};
     Biquad shelf_{};
     Biquad lowBand_{};
+    Biquad lowBand2_{};
+    Biquad subsonicVb_{};
+    Biquad vbLow_{};
+    Biquad vbLow2_{};
     Biquad harmonicHigh_{};
     Biquad harmonicLow_{};
     Biquad airLeft_{};

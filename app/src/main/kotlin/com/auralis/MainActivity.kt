@@ -1034,9 +1034,9 @@ class MainActivity : Activity() {
             updateEqPresetUi()
         }
 
-        dspCard(content, "Bass boost", "Deep, punchy low end that stays clean at high volume.") { body ->
+        dspCard(content, "Bass boost", "Make your music hit harder, on headphones or the phone speaker.") { body ->
             bassToggle = dspSwitch(
-                body, "Enable bass boost", "Fuller bass, clearer vocals and a touch of sparkle, tuned like popular consumer speakers."
+                body, "Feel the beat", "Punchier kicks and fatter bass without muddy vocals. Auralis tunes it for headphones or your phone speaker by itself."
             ) { enabled ->
                 playback?.setBassBoost(enabled, bassSlider.value / 100.0)
             }
@@ -1044,10 +1044,10 @@ class MainActivity : Activity() {
                 body, "STRENGTH", 65f, 100f, 1f,
                 { value ->
                     when {
-                        value < 25f -> "${value.toInt()}% · Subtle"
-                        value < 55f -> "${value.toInt()}% · Light"
-                        value < 80f -> "${value.toInt()}% · Punchy"
-                        else -> "${value.toInt()}% · Heavy"
+                        value < 25f -> "${value.toInt()}% · Warm"
+                        value < 55f -> "${value.toInt()}% · Punchy"
+                        value < 80f -> "${value.toInt()}% · Boom 💥"
+                        else -> "${value.toInt()}% · Thunder ⚡"
                     }
                 }
             ) { value ->
