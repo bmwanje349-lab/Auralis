@@ -41,9 +41,14 @@ constexpr double kMinBoostFraction = 0.6;
 // Virtual bass: how much of the generated harmonics is mixed in. Headphones already move real air at
 // 50-100 Hz, so they get a light touch; phone and small speakers cannot, so the ear is given the
 // harmonics instead (the "missing fundamental" trick) and the unreproducible deep lift is eased back.
-constexpr double kHarmonicHeadphones = 3.0;
-constexpr double kHarmonicSpeaker = 8.0;
-constexpr double kSpeakerLiftScale = 0.75;
+constexpr double kHarmonicHeadphones = 2.2;
+constexpr double kHarmonicSpeaker = 5.0;
+// A phone speaker cannot play 40-100 Hz; pushing it there only makes the little driver and the phone's
+// body rattle (a plastic-bag buzz). So on a speaker the lift is gentle, starts higher up where the
+// speaker can actually answer, and nothing below about 90 Hz is boosted.
+constexpr double kSpeakerLiftScale = 0.4;
+constexpr double kSpeakerShelfHz = 200.0;
+constexpr double kSpeakerSubsonicHz = 90.0;
 // 4th-order Butterworth section Qs for the band-limiting filters.
 constexpr double kButterQ1 = 0.54119610;
 constexpr double kButterQ2 = 1.30656296;
@@ -61,7 +66,7 @@ constexpr double kMaxTotalBoostDb = 19.0;
 // Bass priority: when bass plus everything else would go past this level, only the everything-else
 // (vocals, hats, synths) is turned down for that instant, never the bass. Quiet music is never touched.
 constexpr double kCeiling = 0.95;
-constexpr double kMinDuck = 0.5;
+constexpr double kMinDuck = 0.6;
 constexpr double kSilent = 1.0e-4;
 constexpr int kControlInterval = 16;
 
@@ -157,8 +162,10 @@ void BassBoost::prepare(int sampleRate) noexcept {
     slowReleaseCoeff_ = timeConstantCoeff(0.150, sampleRate_);
     punchAttackCoeff_ = timeConstantCoeff(0.002, sampleRate_);
     punchReleaseCoeff_ = timeConstantCoeff(0.040, sampleRate_);
-    duckAttackCoeff_ = timeConstantCoeff(0.0004, sampleRate_);
-    duckReleaseCoeff_ = timeConstantCoeff(0.090, sampleRate_);
+    levelAttackCoeff_ = timeConstantCoeff(0.001, sampleRate_);
+    levelReleaseCoeff_ = timeConstantCoeff(0.080, sampleRate_);
+    duckAttackCoeff_ = timeConstantCoeff(0.006, sampleRate_);
+    duckReleaseCoeff_ = timeConstantCoeff(0.120, sampleRate_);
     subsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
     subsonicVb_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
     liftSubsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
@@ -192,6 +199,8 @@ void BassBoost::resetState() noexcept {
     vbLow2_.reset();
     vbEnv_ = 0.0;
     duck_ = 1.0;
+    bassPeak_ = 0.0;
+    restPeak_ = 0.0;
     fastEnv_ = 0.0;
     slowEnv_ = 0.0;
     punch_ = 0.0;
@@ -226,6 +235,10 @@ void BassBoost::updateVoicing() noexcept {
 }
 
 void BassBoost::updateControl() noexcept {
+    if (appliedSpeaker_ != speaker_) {
+        appliedSpeaker_ = speaker_;
+        liftSubsonic_.highPass(sampleRate_, speaker_ ? kSpeakerSubsonicHz : kSubsonicHz, kButterworthQ);
+    }
     const double envDb = 20.0 * std::log10(env_ + 1.0e-6);
     const double t = std::clamp((envDb - kQuietDb) / (kLoudDb - kQuietDb), 0.0, 1.0);
     const double fraction = 1.0 - (1.0 - kMinBoostFraction) * smoothstep(t);
@@ -280,7 +293,7 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         if (++controlCounter_ >= kControlInterval) {
             controlCounter_ = 0;
             updateControl();
-            shelf_.lowShelf(sampleRate_, kShelfHz, kShelfQ, 20.0 * std::log10(gain_));
+            shelf_.lowShelf(sampleRate_, speaker_ ? kSpeakerShelfHz : kShelfHz, kShelfQ, 20.0 * std::log10(gain_));
         }
         gain_ += (gainTarget_ - gain_) * gainCoeff_;
 
@@ -325,9 +338,14 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         const double bassTotal = low + extra * mix_;
         const double restL = baseL - low;
         const double restR = baseR - low;
+        // The ducking follows smoothed peak levels, never the bass waveform itself: following the waveform
+        // would wobble the highs at the bass rate and sound like a buzz.
         const double restPeak = std::max(std::fabs(restL), std::fabs(restR));
-        const double headroom = std::max(0.0, kCeiling - std::fabs(bassTotal));
-        const double duckTarget = restPeak > headroom ? std::clamp(headroom / restPeak, kMinDuck, 1.0) : 1.0;
+        const double bassMag = std::fabs(bassTotal);
+        bassPeak_ += (bassMag - bassPeak_) * (bassMag > bassPeak_ ? levelAttackCoeff_ : levelReleaseCoeff_);
+        restPeak_ += (restPeak - restPeak_) * (restPeak > restPeak_ ? levelAttackCoeff_ : levelReleaseCoeff_);
+        const double headroom = std::max(0.0, kCeiling - bassPeak_);
+        const double duckTarget = restPeak_ > headroom ? std::clamp(headroom / restPeak_, kMinDuck, 1.0) : 1.0;
         duck_ += (duckTarget - duck_) * (duckTarget < duck_ ? duckAttackCoeff_ : duckReleaseCoeff_);
         const double duck = 1.0 + (duck_ - 1.0) * mix_;
         x[2 * i] = static_cast<float>(sanitize(restL * duck + bassTotal));

@@ -74,11 +74,16 @@ private:
     bool enabled_ = false;
     bool running_ = false;
     bool speaker_ = false;
+    bool appliedSpeaker_ = false;
     double listenLevel_ = 1.0;
     double fastEnv_ = 0.0;
     double slowEnv_ = 0.0;
     double punch_ = 0.0;
     double duck_ = 1.0;
+    double bassPeak_ = 0.0;
+    double restPeak_ = 0.0;
+    double levelAttackCoeff_ = 0.0;
+    double levelReleaseCoeff_ = 0.0;
     double duckAttackCoeff_ = 0.0;
     double duckReleaseCoeff_ = 0.0;
     double fastAttackCoeff_ = 0.0;

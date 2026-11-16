@@ -287,7 +287,7 @@ int main() {
         const double headphones = harmonic(false);
         const double speaker = harmonic(true);
         std::cout << "3rd harmonic: headphones " << headphones << ", speaker " << speaker << "\n";
-        check(speaker > headphones * 2.0, "speaker mode adds much stronger virtual bass");
+        check(speaker > headphones * 1.4, "speaker mode adds stronger virtual bass");
         check(headphones > 0.005, "headphone mode still adds audible warmth");
     }
 
