@@ -148,11 +148,11 @@ int main() {
         check(worst > -2.6, "no hole in the low mids above the boosted bass");
     }
 
-    // Virtual bass: a pure 60 Hz tone gains harmonics it did not have.
+    // Virtual bass (small speakers): a pure 60 Hz tone gains harmonics it did not have.
     {
         BassBoost stage;
         stage.prepare(kRate);
-        stage.configure(true, 1.0);
+        stage.configure(true, 1.0, true);
         std::vector<float> buffer = sine(60.0, 0.1, 2.5);
         run(stage, buffer);
         const double h3 = tailTone(buffer, 180.0, 0.5);
@@ -274,6 +274,22 @@ int main() {
         check(quiet > loud + 2.0, "low volume gets noticeably more bass than full volume");
     }
 
+    // Headphones: a loud bass note must come out as a clean sine (no buzz from added harmonics).
+    {
+        for (double hz : {50.0, 60.0, 80.0, 100.0}) {
+            BassBoost stage;
+            stage.prepare(kRate);
+            stage.configure(true, 1.0, false);
+            std::vector<float> buffer = sine(hz, 0.4, 3.0);
+            run(stage, buffer);
+            const double fund = tailTone(buffer, hz, 0.5);
+            double worst = 0.0;
+            for (int h = 2; h <= 7; ++h) worst = std::max(worst, tailTone(buffer, hz * h, 0.5) / fund);
+            std::cout << hz << " Hz loud on headphones: worst harmonic " << 20.0 * std::log10(worst + 1.0e-12) << " dB\n";
+            check(worst < 0.003, "loud bass on headphones has no audible harmonics (under -50 dB)");
+        }
+    }
+
     // Speakers get much stronger virtual bass than headphones.
     {
         auto harmonic = [](bool speaker) {
@@ -288,7 +304,8 @@ int main() {
         const double speaker = harmonic(true);
         std::cout << "3rd harmonic: headphones " << headphones << ", speaker " << speaker << "\n";
         check(speaker > headphones * 1.4, "speaker mode adds stronger virtual bass");
-        check(headphones > 0.005, "headphone mode still adds audible warmth");
+        // Headphones reproduce real bass, so generated harmonics there were only audible as a buzz.
+        check(headphones < 0.001, "headphone mode keeps the bass clean (no generated harmonics)");
     }
 
     // Switching on mid-note does not click: no sample step much bigger than the music itself.

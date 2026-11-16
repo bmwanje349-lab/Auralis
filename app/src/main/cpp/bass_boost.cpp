@@ -41,7 +41,9 @@ constexpr double kMinBoostFraction = 0.6;
 // Virtual bass: how much of the generated harmonics is mixed in. Headphones already move real air at
 // 50-100 Hz, so they get a light touch; phone and small speakers cannot, so the ear is given the
 // harmonics instead (the "missing fundamental" trick) and the unreproducible deep lift is eased back.
-constexpr double kHarmonicHeadphones = 2.2;
+// On headphones the generated harmonics are off entirely: they were the audible 'buzz' (2nd/3rd harmonic
+// at 90-300 Hz) and the real bass is already reproduced.
+constexpr double kHarmonicHeadphones = 0.0;
 constexpr double kHarmonicSpeaker = 5.0;
 // A phone speaker cannot play 40-100 Hz; pushing it there only makes the little driver and the phone's
 // body rattle (a plastic-bag buzz). So on a speaker the lift is gentle, starts higher up where the
@@ -68,7 +70,7 @@ constexpr double kMaxTotalBoostDb = 19.0;
 constexpr double kCeiling = 0.95;
 constexpr double kMinDuck = 0.6;
 constexpr double kSilent = 1.0e-4;
-constexpr int kControlInterval = 16;
+constexpr int kControlInterval = 8;
 
 inline double smoothstep(double t) noexcept { return t * t * (3.0 - 2.0 * t); }
 
@@ -163,8 +165,8 @@ void BassBoost::prepare(int sampleRate) noexcept {
     punchAttackCoeff_ = timeConstantCoeff(0.002, sampleRate_);
     punchReleaseCoeff_ = timeConstantCoeff(0.040, sampleRate_);
     levelAttackCoeff_ = timeConstantCoeff(0.001, sampleRate_);
-    levelReleaseCoeff_ = timeConstantCoeff(0.080, sampleRate_);
-    duckAttackCoeff_ = timeConstantCoeff(0.006, sampleRate_);
+    levelReleaseCoeff_ = timeConstantCoeff(0.200, sampleRate_);
+    duckAttackCoeff_ = timeConstantCoeff(0.012, sampleRate_);
     duckReleaseCoeff_ = timeConstantCoeff(0.120, sampleRate_);
     subsonic_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
     subsonicVb_.highPass(sampleRate_, kSubsonicHz, kButterworthQ);
@@ -317,11 +319,14 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
 
         // 4. Slam: soft-limit the boosted bass band on its own, never going below what the track had.
         const double boostedBass = low + punchLift;
+        // Weight 0 on headphones (clean bass wave), 1 on small speakers. It follows the smoothed
+        // harmonic gain so switching output devices never makes a step.
+        const double slamWeight = std::clamp(harmonicGain_ / kHarmonicSpeaker, 0.0, 1.0);
         double slam = 0.0;
-        if (std::fabs(boostedBass) > 0.05) {
+        if (slamWeight > 1.0e-4 && std::fabs(boostedBass) > 0.05) {
             double limited = kBassCeiling * std::tanh(boostedBass / kBassCeiling);
             if (std::fabs(limited) < std::fabs(low)) limited = low;
-            slam = (limited - boostedBass) * amount_;
+            slam = (limited - boostedBass) * amount_ * slamWeight;
         }
 
         const double extra = punchLift + slam + harmonicGain_ * amount_ * harmonics;
