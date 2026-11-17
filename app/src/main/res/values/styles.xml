@@ -1,11 +1,22 @@
 <resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+    <style name="AppTheme" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">#A8E7D5</item>
+        <item name="colorOnPrimary">#082018</item>
+        <item name="colorSecondary">#B9B0FF</item>
+        <item name="colorOnSecondary">#171329</item>
+        <item name="colorSurface">#121B24</item>
+        <item name="colorOnSurface">#F1F5F6</item>
+        <item name="colorSurfaceVariant">#202D37</item>
+        <item name="colorOnSurfaceVariant">#A8B7BE</item>
+        <item name="colorOutline">#34434E</item>
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#80CBC4</item>
-        <item name="android:statusBarColor">#101820</item>
-        <item name="android:navigationBarColor">#101820</item>
+        <item name="android:colorAccent">#A8E7D5</item>
+        <item name="android:statusBarColor">#080D12</item>
+        <item name="android:navigationBarColor">#080D12</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">#101820</item>
+        <item name="android:windowBackground">#080D12</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
     </style>
 </resources>

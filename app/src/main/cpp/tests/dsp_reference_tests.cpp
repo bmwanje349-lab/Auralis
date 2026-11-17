@@ -606,6 +606,22 @@ int main() {
     peakCappedPipeline.setBalance(false,0.0);
     peakCappedPipeline.setLimiter(false,LimiterPath::HardCeiling);
     pipelineTags.albumGainDb=9.0; pipelineTags.albumPeakLinear=0.5;
+    AudioPipeline masterGainPipeline(48000);
+    masterGainPipeline.setStereoWide(false,0.0);
+    masterGainPipeline.setMono(false);
+    masterGainPipeline.setBalance(false,0.0);
+    masterGainPipeline.setLimiter(false,LimiterPath::HardCeiling);
+    masterGainPipeline.setReplayGain(0,0,0,0);
+    masterGainPipeline.setMasterGainDb(6.0);
+    float masterGainInput[]={0.25f,-0.25f};
+    check(masterGainPipeline.enqueueInput(masterGainInput,1) && masterGainPipeline.processOne()==1,
+          "Independent master preamp command traverses the native control queue while ReplayGain is None");
+    float masterGainOutput[2]{};
+    check(masterGainPipeline.dequeueOutput(masterGainOutput,1)==1 &&
+          near(masterGainOutput[0],0.25*std::pow(10.0,6.0/20.0),1e-7) &&
+          near(masterGainOutput[1],-0.25*std::pow(10.0,6.0/20.0),1e-7),
+          "Master preamp is audible in ReplayGain None mode using the existing master-gain stage");
+
     peakCappedPipeline.setReplayGain(2,0,0,0);
     peakCappedPipeline.setReplayGainMetadata(pipelineTags);
     float peakCapInput[]={0.25f,-0.25f};
