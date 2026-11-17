@@ -1875,7 +1875,7 @@ class MainActivity : Activity() {
         val container = libraryListContainer ?: return
         val collectionScroll = libraryCollectionScroll ?: return
         val trackList = libraryListView ?: return
-        val adapter = libraryTrackAdapter ?: return
+        libraryTrackAdapter ?: return
 
         libraryRenderedCount = 0
         libraryPageTracks = emptyList()
@@ -2073,10 +2073,14 @@ class MainActivity : Activity() {
                     }
 
                     else -> {
-                        collectionScroll.visibility = View.GONE
-                        trackList.visibility = View.VISIBLE
-                        adapter.submit(filtered)
-                        trackList.setSelection(0)
+                        // Use the same proven song-row implementation as Home's
+                        // Recently added section. The ListView adapter was intercepting
+                        // overflow taps on library, search, favourites and playlist pages.
+                        // The ScrollView path also keeps the existing paged "load next" UI.
+                        collectionScroll.visibility = View.VISIBLE
+                        trackList.visibility = View.GONE
+                        collectionScroll.scrollTo(0, 0)
+                        appendLibraryPage(container)
                     }
                 }
             }
