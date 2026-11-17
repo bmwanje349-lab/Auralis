@@ -93,6 +93,7 @@ class MainActivity : Activity() {
     private var currentSearch = ""
     private var currentSort = SORT_TITLE
     private var currentAlbum: String? = null
+    private var currentAlbumId: Long? = null
     private var currentArtist: String? = null
     private var currentPlaylist: String? = null
     private var currentNowPlaying: MusicTrack? = null
@@ -702,14 +703,19 @@ class MainActivity : Activity() {
 
         val albumGroups = homeAlbumTracks
         if (albumGroups.isNotEmpty()) {
-            sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; showLibrary(refreshContent = true) })
+            sectionHeading(content, "Albums", "See all", { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = null; currentAlbumId = null; showLibrary(refreshContent = true) })
             val horizontal = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             albumGroups.take(7).forEach { track ->
                 val albumCard = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     isClickable = true
                     isFocusable = true
-                    setOnClickListener { currentLibraryTab = LIBRARY_ALBUMS; currentAlbum = track.album; showLibrary(refreshContent = true) }
+                    setOnClickListener {
+                        currentLibraryTab = LIBRARY_ALBUMS
+                        currentAlbum = track.album
+                        currentAlbumId = track.albumId.takeIf { it > 0L }
+                        showLibrary(refreshContent = true)
+                    }
                 }
                 albumCard.addView(artwork(track, 152, 19), LinearLayout.LayoutParams(dp(152), dp(152)))
                 albumCard.addView(uiText(track.album, 14f, cText, true).apply { maxLines = 1; setPadding(0, dp(8), 0, dp(3)) })
@@ -728,7 +734,7 @@ class MainActivity : Activity() {
             .mapNotNull { id -> libraryIndexById[id]?.let { librarySnapshot.getOrNull(it) } }.take(12)
         if (likedTracks.isNotEmpty()) {
             sectionHeading(content, "Your favourites", "See all", {
-                currentLibraryTab = LIBRARY_FAVOURITES; currentAlbum = null; currentArtist = null; currentPlaylist = null
+                currentLibraryTab = LIBRARY_FAVOURITES; currentAlbum = null; currentAlbumId = null; currentArtist = null; currentPlaylist = null
                 showLibrary(refreshContent = true)
             })
             addTrackCardsRow(content, likedTracks)
@@ -1381,6 +1387,13 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun albumCollectionKey(track: MusicTrack): String =
+        if (track.albumId > 0L) {
+            "album-id:${track.albumId}"
+        } else {
+            "album-fallback:${track.album.trim().lowercase()}|${track.artist.trim().lowercase()}"
+        }
+
     private fun refreshLibrary(force: Boolean = false, onDone: ((Int) -> Unit)? = null) {
         Thread({
             val loaded = runCatching { MediaLibraryRepository.load(this) }.getOrElse {
@@ -1393,8 +1406,13 @@ class MainActivity : Activity() {
                 track.id to "${track.title} ${track.artist} ${track.album}".lowercase()
             }
             val recent = loaded.sortedByDescending { it.dateAddedSeconds }
-            val albums = loaded.groupBy { it.album to it.artist }.values
-                .mapNotNull { group -> group.maxByOrNull { it.dateAddedSeconds } }
+            val albums = loaded.groupBy { albumCollectionKey(it) }.values
+                .mapNotNull { group ->
+                    val representative = group.maxByOrNull { it.dateAddedSeconds } ?: return@mapNotNull null
+                    val artists = group.map { it.artist.trim() }.distinctBy { it.lowercase() }
+                    val artistLabel = if (artists.size > 1) "Various artists" else artists.firstOrNull() ?: "Unknown artist"
+                    representative.copy(artist = artistLabel)
+                }
                 .sortedByDescending { it.dateAddedSeconds }
             val fingerprint = loaded.fold(17L) { hash, track -> hash * 31L + track.id * 7L + track.dateAddedSeconds }
             runOnUiThread {
@@ -1521,7 +1539,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     if (currentLibraryTab != tab) {
                         currentLibraryTab = tab
-                        currentAlbum = null; currentArtist = null; currentPlaylist = null
+                        currentAlbum = null; currentAlbumId = null; currentArtist = null; currentPlaylist = null
                         if (searchMode) showSearch(refreshContent = true) else showLibrary(refreshContent = true)
                     }
                 }
@@ -1544,7 +1562,7 @@ class MainActivity : Activity() {
                 minHeight = dp(40)
                 backgroundTintList = ColorStateList.valueOf(cSurface)
                 setTextColor(cAccent)
-                setOnClickListener { currentAlbum = null; currentArtist = null; currentPlaylist = null; if (searchMode) showSearch(refreshContent = true) else showLibrary(refreshContent = true) }
+                setOnClickListener { currentAlbum = null; currentAlbumId = null; currentArtist = null; currentPlaylist = null; if (searchMode) showSearch(refreshContent = true) else showLibrary(refreshContent = true) }
             }
             page.addView(back, matchWrap().apply { bottomMargin = dp(5) })
         }
@@ -1760,8 +1778,12 @@ class MainActivity : Activity() {
             val item = libraryCollectionItems[index]
             addLibraryCollectionRow(container, item.title, item.subtitle, item.trailing, item.track) {
                 when (tab) {
-                    LIBRARY_ALBUMS -> { currentAlbum = item.title; currentArtist = null }
-                    LIBRARY_ARTISTS -> { currentArtist = item.title; currentAlbum = null }
+                    LIBRARY_ALBUMS -> {
+                        currentAlbum = item.title
+                        currentAlbumId = item.track?.albumId?.takeIf { it > 0L }
+                        currentArtist = null
+                    }
+                    LIBRARY_ARTISTS -> { currentArtist = item.title; currentAlbum = null; currentAlbumId = null }
                     LIBRARY_PLAYLISTS -> currentPlaylist = item.title
                 }
                 showLibrary(refreshContent = true)
@@ -1807,6 +1829,7 @@ class MainActivity : Activity() {
         val tab = currentLibraryTab
         val sort = currentSort
         val album = currentAlbum
+        val albumId = currentAlbumId
         val artist = currentArtist
         val playlist = currentPlaylist
         val sourceTracks = librarySnapshot
@@ -1864,12 +1887,18 @@ class MainActivity : Activity() {
 
             val collections = when {
                 tab == LIBRARY_ALBUMS && album == null -> sourceTracks
-                    .groupBy { it.album to it.artist }
-                    .mapNotNull { (key, tracks) ->
-                        if (interrupted() || (!matches(key.first.lowercase()) && !matches(key.second.lowercase()))) null
+                    .groupBy { albumCollectionKey(it) }
+                    .values
+                    .mapNotNull { tracks ->
+                        val representative = tracks.maxByOrNull { it.dateAddedSeconds } ?: return@mapNotNull null
+                        val artists = tracks.map { it.artist.trim() }.distinctBy { it.lowercase() }
+                        val artistLabel = if (artists.size > 1) "Various artists" else artists.firstOrNull() ?: "Unknown artist"
+                        if (interrupted() ||
+                            (!matches(representative.album.lowercase()) &&
+                                !tracks.any { matches(it.artist.lowercase()) })) null
                         else LibraryCollectionEntry(
-                            key.first, key.second, "${tracks.size} tracks",
-                            tracks.maxByOrNull { it.dateAddedSeconds }
+                            representative.album, artistLabel, "${tracks.size} tracks",
+                            representative.copy(artist = artistLabel)
                         )
                     }
                     .sortedBy { it.title.lowercase() }
@@ -1921,7 +1950,9 @@ class MainActivity : Activity() {
                 for (track in sourceTracks) {
                     if (interrupted()) return@submit
                     if (selectedIds != null && track.id !in selectedIds) continue
-                    if (album != null && track.album != album) continue
+                    if (albumId != null) {
+                        if (track.albumId != albumId) continue
+                    } else if (album != null && track.album != album) continue
                     if (artist != null && track.artist != artist) continue
                     if (queryKey.isNotBlank()) {
                         val searchable = librarySearchIndex[track.id]
@@ -3184,7 +3215,7 @@ class MainActivity : Activity() {
             else -> when {
                 (activeDestination == DEST_LIBRARY || activeDestination == DEST_SEARCH) &&
                     (currentAlbum != null || currentArtist != null || currentPlaylist != null) -> {
-                    currentAlbum = null; currentArtist = null; currentPlaylist = null
+                    currentAlbum = null; currentAlbumId = null; currentArtist = null; currentPlaylist = null
                     if (activeDestination == DEST_SEARCH) showSearch(refreshContent = true) else showLibrary(refreshContent = true)
                 }
                 activeDestination != DEST_HOME -> showHome()
