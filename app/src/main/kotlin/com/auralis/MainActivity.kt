@@ -1617,6 +1617,9 @@ class MainActivity : Activity() {
             setBackgroundColor(cBackground)
             setPadding(0, dp(8), 0, dp(22))
             clipToPadding = false
+            // ListView otherwise keeps touch/focus on the row and can swallow taps
+            // intended for the nested three-dot action control.
+            itemsCanFocus = true
         }
         libraryTrackAdapter = TrackListAdapter()
         listView.adapter = libraryTrackAdapter
@@ -1702,9 +1705,16 @@ class MainActivity : Activity() {
                     contentDescription = "More track actions"
                     isClickable = true
                     isFocusable = true
-                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    minimumWidth = dp(48)
+                    minimumHeight = dp(48)
+                    background = android.graphics.drawable.RippleDrawable(
+                        ColorStateList.valueOf(Color.argb(48, 168, 231, 213)),
+                        roundedBackground(cSurfaceSoft, 24),
+                        null
+                    )
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
                 }
-                row.addView(more, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(6) })
+                row.addView(more, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(4) })
                 holder = TrackRowHolder(art, title, artist, duration, more)
                 row.tag = holder
             } else {
@@ -2087,10 +2097,17 @@ class MainActivity : Activity() {
             contentDescription = "More actions for ${track.title}"
             isClickable = true
             isFocusable = true
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            minimumWidth = dp(48)
+            minimumHeight = dp(48)
+            background = android.graphics.drawable.RippleDrawable(
+                ColorStateList.valueOf(Color.argb(48, 168, 231, 213)),
+                roundedBackground(cSurfaceSoft, 24),
+                null
+            )
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             setOnClickListener { showTrackActions(track) }
         }
-        row.addView(more, LinearLayout.LayoutParams(dp(44), dp(44)).apply { marginStart = dp(6) })
+        row.addView(more, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(4) })
         row.setOnLongClickListener { showTrackActions(track); true }
         parent.addView(row, matchWrap().apply { topMargin = dp(2) })
 
