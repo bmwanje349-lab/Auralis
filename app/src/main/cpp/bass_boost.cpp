@@ -65,10 +65,12 @@ constexpr double kPunchOnsetRatio = 1.25;
 // Loudness compensation: the ear hears much less bass at low volume, so quiet listening gets more lift.
 constexpr double kQuietListeningExtra = 0.45;
 constexpr double kMaxTotalBoostDb = 19.0;
-// Bass priority: when bass plus everything else would go past this level, only the everything-else
-// (vocals, hats, synths) is turned down for that instant, never the bass. Quiet music is never touched.
+// Headroom control: when the original programme plus the ADDED bass would go past this level, only the
+// added bass is scaled back (never the track itself), down to kMinAddGain. Beyond that, the final safety
+// limiter takes over. Raise kMinAddGain for a heavier bass on loud masters at the cost of vocals dipping
+// in the limiter; lower it to protect vocals more. Quiet music is never touched.
 constexpr double kCeiling = 0.95;
-constexpr double kMinDuck = 0.6;
+constexpr double kMinAddGain = 0.35;
 constexpr double kSilent = 1.0e-4;
 constexpr int kControlInterval = 8;
 
@@ -337,24 +339,19 @@ void BassBoost::process(float* x, std::size_t frames) noexcept {
         const double baseL = l + (airL - l) * mix_;
         const double baseR = r + (airR - r) * mix_;
 
-        // 6. Bass priority. The bass (with its boost) is kept whole; if bass plus the rest of the music
-        //    would go past the ceiling, only the rest ducks for that moment. The output limiter then has
-        //    little left to do, so it does not shrink the bass you just boosted.
-        const double bassTotal = low + extra * mix_;
-        const double restL = baseL - low;
-        const double restR = baseR - low;
-        // The ducking follows smoothed peak levels, never the bass waveform itself: following the waveform
-        // would wobble the highs at the bass rate and sound like a buzz.
-        const double restPeak = std::max(std::fabs(restL), std::fabs(restR));
-        const double bassMag = std::fabs(bassTotal);
-        bassPeak_ += (bassMag - bassPeak_) * (bassMag > bassPeak_ ? levelAttackCoeff_ : levelReleaseCoeff_);
-        restPeak_ += (restPeak - restPeak_) * (restPeak > restPeak_ ? levelAttackCoeff_ : levelReleaseCoeff_);
-        const double headroom = std::max(0.0, kCeiling - bassPeak_);
-        const double duckTarget = restPeak_ > headroom ? std::clamp(headroom / restPeak_, kMinDuck, 1.0) : 1.0;
-        duck_ += (duckTarget - duck_) * (duckTarget < duck_ ? duckAttackCoeff_ : duckReleaseCoeff_);
-        const double duck = 1.0 + (duck_ - 1.0) * mix_;
-        x[2 * i] = static_cast<float>(sanitize(restL * duck + bassTotal));
-        x[2 * i + 1] = static_cast<float>(sanitize(restR * duck + bassTotal));
+        // 6. Headroom control on the added bass only. The programme (baseL/baseR, including the track's own
+        //    bass) is never turned down here. Levels follow smoothed peaks, never the waveform, so the
+        //    control cannot wobble the highs at the bass rate.
+        const double add = extra * mix_;
+        const double programPeak = std::max(std::fabs(baseL), std::fabs(baseR));
+        const double addMag = std::fabs(add);
+        bassPeak_ += (addMag - bassPeak_) * (addMag > bassPeak_ ? levelAttackCoeff_ : levelReleaseCoeff_);
+        restPeak_ += (programPeak - restPeak_) * (programPeak > restPeak_ ? levelAttackCoeff_ : levelReleaseCoeff_);
+        const double room = std::max(0.0, kCeiling - restPeak_);
+        const double addGainTarget = bassPeak_ > room ? std::clamp(room / bassPeak_, kMinAddGain, 1.0) : 1.0;
+        duck_ += (addGainTarget - duck_) * (addGainTarget < duck_ ? duckAttackCoeff_ : duckReleaseCoeff_);
+        x[2 * i] = static_cast<float>(sanitize(baseL + add * duck_));
+        x[2 * i + 1] = static_cast<float>(sanitize(baseR + add * duck_));
     }
 }
 

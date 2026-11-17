@@ -218,9 +218,9 @@ int main() {
         check(imdDb < -38.0, "a loud bass note barely smears the 1 kHz tone (under 1.3%)");
         const double bass55 = tailTone(buffer, 55.0, 1.0);
         std::cout << "55 Hz in the loud mix: " << dbOf(bass55 / 0.5) << " dB\n";
-        check(bass55 / 0.5 > 1.2, "bass is still lifted in a loud mix (bass priority)");
+        check(bass55 / 0.5 > 1.2, "bass is still lifted in a loud mix");
         std::cout << "1 kHz in the loud mix: " << dbOf(carrier / 0.3) << " dB\n";
-        check(carrier / 0.3 > 0.45, "the 1 kHz tone is ducked by at most about 6 dB in a loud mix");
+        check(carrier / 0.3 > 0.89, "the 1 kHz tone loses under 1 dB in a loud mix (only the added bass is scaled back)");
     }
 
     // No hole at the very bottom: 30 Hz (808 territory) is lifted, not cancelled.

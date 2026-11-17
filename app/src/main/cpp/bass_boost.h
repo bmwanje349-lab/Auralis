@@ -23,8 +23,9 @@ namespace auralis {
  *     headphones. A gentle dip around 350 Hz clears the boxy region the extra bass would otherwise
  *     cloud, a presence lift around 3 kHz keeps vocals forward, and a small high-shelf lift at 8 kHz
  *     keeps the added weight from sounding dull. All three scale with the strength.
- *  6. Bass priority: no clipping inside the stage. When bass plus the rest would run out of room, only
- *     the rest ducks for that instant, so the boosted bass is never shrunk by the output limiter.
+ *  6. Headroom control: when the original track plus the added bass would run out of room, only the
+ *     added bass is scaled back (down to a floor), so vocals and the rest of the track are not turned down
+ *     by the boost. Anything beyond the floor is left to the final safety limiter.
  *  7. Device-aware: headphones get a clean low shelf, small speakers get stronger virtual bass.
  *
  * Disabled, the stage is bit-exact pass-through and uses no CPU. Enabling, disabling and changing
