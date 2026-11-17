@@ -62,15 +62,17 @@ jobs:
       - name: Assemble Android player
         run: |
           java -version
-          /tmp/gradle-8.7/bin/gradle --no-daemon -p auralis assembleDebug testDebugUnitTest
+          /tmp/gradle-8.7/bin/gradle --no-daemon -p auralis assembleDebug assemblePreview testDebugUnitTest
 
       - name: Verify APK and record build identity
         shell: bash
         run: |
           set -euo pipefail
           APK=auralis/app/build/outputs/apk/debug/app-debug.apk
+          PREVIEW_APK=auralis/app/build/outputs/apk/preview/app-preview.apk
           test -s "$APK"
-          sha256sum "$APK" | tee auralis/AURALIS-SHA256SUMS.txt
+          test -s "$PREVIEW_APK"
+          sha256sum "$APK" "$PREVIEW_APK" | tee auralis/AURALIS-SHA256SUMS.txt
           cat > auralis/AURALIS-BUILD-INFO.txt <<INFO
           Auralis 1.4.0 sound presets, saved sound settings, settings page
           Source: ${GITHUB_SHA}
@@ -80,13 +82,24 @@ jobs:
           Build task: assembleDebug
           Test task: testDebugUnitTest
           INFO
+          cat > auralis/AURALIS-PREVIEW-BUILD-INFO.txt <<INFO
+          Auralis Preview 1.4.0 library overflow fix
+          Source: ${GITHUB_SHA}
+          Application ID: com.auralis.preview
+          Version: 1.4.0-preview (versionCode 14)
+          Variant: preview (debug-signed, side-by-side install)
+          Build task: assemblePreview
+          Test task: testDebugUnitTest
+          INFO
       - name: Upload verified debug APK
         uses: actions/upload-artifact@v4
         with:
           name: auralis-1.4.0-debug-${{ github.sha }}
           path: |
             auralis/app/build/outputs/apk/debug/app-debug.apk
+            auralis/app/build/outputs/apk/preview/app-preview.apk
             auralis/AURALIS-BUILD-INFO.txt
+            auralis/AURALIS-PREVIEW-BUILD-INFO.txt
             auralis/AURALIS-SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
