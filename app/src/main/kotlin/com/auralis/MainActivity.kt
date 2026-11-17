@@ -26,6 +26,7 @@ import android.text.InputType
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
@@ -1666,6 +1667,53 @@ class MainActivity : Activity() {
         val trackList: ListView
     )
 
+    /**
+     * Routes taps in the trailing overflow control directly to that control before
+     * ListView/row click handling can treat the gesture as a normal song-row tap.
+     * This keeps the three-dot action reliable while preserving row tap and long-press.
+     */
+    private inner class OverflowAwareTrackRow(context: Context) : LinearLayout(context) {
+        var overflowControl: View? = null
+        private var overflowGesture = false
+
+        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+            val control = overflowControl
+            if (overflowGesture) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_UP -> {
+                        val hit = android.graphics.Rect()
+                        control?.getHitRect(hit)
+                        control?.isPressed = false
+                        if (control != null && control.isEnabled &&
+                            hit.contains(event.x.toInt(), event.y.toInt())) {
+                            control.performClick()
+                        }
+                        overflowGesture = false
+                        return true
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        control?.isPressed = false
+                        overflowGesture = false
+                        return true
+                    }
+                    else -> return true
+                }
+            }
+
+            if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+                control != null && control.visibility == View.VISIBLE && control.isEnabled) {
+                val hit = android.graphics.Rect()
+                control.getHitRect(hit)
+                if (hit.contains(event.x.toInt(), event.y.toInt())) {
+                    overflowGesture = true
+                    control.isPressed = true
+                    return true
+                }
+            }
+            return super.dispatchTouchEvent(event)
+        }
+    }
+
     private inner class TrackListAdapter : BaseAdapter() {
         private var tracks: List<MusicTrack> = emptyList()
 
@@ -1680,10 +1728,10 @@ class MainActivity : Activity() {
         override fun hasStableIds(): Boolean = true
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val row: LinearLayout
+            val row: OverflowAwareTrackRow
             val holder: TrackRowHolder
             if (convertView == null) {
-                row = LinearLayout(this@MainActivity).apply {
+                row = OverflowAwareTrackRow(this@MainActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(4), dp(9), dp(4), dp(9))
@@ -1715,10 +1763,11 @@ class MainActivity : Activity() {
                     setPadding(dp(10), dp(10), dp(10), dp(10))
                 }
                 row.addView(more, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(4) })
+                row.overflowControl = more
                 holder = TrackRowHolder(art, title, artist, duration, more)
                 row.tag = holder
             } else {
-                row = convertView as LinearLayout
+                row = convertView as OverflowAwareTrackRow
                 holder = row.tag as TrackRowHolder
             }
 
@@ -2067,7 +2116,7 @@ class MainActivity : Activity() {
     }
 
     private fun addTrackRow(parent: LinearLayout, track: MusicTrack, queueTracks: List<MusicTrack>, index: Int) {
-        val row = LinearLayout(this).apply {
+        val row = OverflowAwareTrackRow(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             isClickable = true
@@ -2108,6 +2157,7 @@ class MainActivity : Activity() {
             setOnClickListener { showTrackActions(track) }
         }
         row.addView(more, LinearLayout.LayoutParams(dp(48), dp(48)).apply { marginStart = dp(4) })
+        row.overflowControl = more
         row.setOnLongClickListener { showTrackActions(track); true }
         parent.addView(row, matchWrap().apply { topMargin = dp(2) })
 
